@@ -9,11 +9,15 @@ const getInitialConfig = () => {
         return { url: envUrl, key: envKey };
     }
 
+    // Fallback to project default credentials
+    const defaultUrl = 'https://kkqljmupclhzrtqdqeus.supabase.co';
+    const defaultKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtrcWxqbXVwY2xoenJ0cWRxZXVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM0MjgzNzMsImV4cCI6MjA5OTAwNDM3M30.goWi9HusnyiJNiF7hZfyBrdduYEheIf2ulNigj5aIbE';
+
     // Fallback to local storage configuration
     const localUrl = localStorage.getItem('ROOMEMATES_SUPABASE_URL');
     const localKey = localStorage.getItem('ROOMEMATES_SUPABASE_KEY');
 
-    return { url: localUrl || '', key: localKey || '' };
+    return { url: localUrl || defaultUrl, key: localKey || defaultKey };
 };
 
 const config = getInitialConfig();
