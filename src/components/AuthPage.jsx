@@ -51,6 +51,15 @@ export default function AuthPage({ onAuthSuccess }) {
         }
     };
 
+    // Helper to format Plain Username to synthetic local email
+    const formatAuthEmail = (input) => {
+        const trimmed = input.trim();
+        if (trimmed.includes('@')) {
+            return trimmed;
+        }
+        return `${trimmed}@roomemates.local`;
+    };
+
     // Handle login & sign up
     const handleAuthSubmit = async (e) => {
         e.preventDefault();
@@ -65,10 +74,11 @@ export default function AuthPage({ onAuthSuccess }) {
         }
 
         try {
+            const resolvedEmail = formatAuthEmail(email);
             if (isSignUp) {
                 // Sign Up
                 const { data, error } = await supabase.auth.signUp({
-                    email,
+                    email: resolvedEmail,
                     password,
                     options: {
                         data: {
@@ -81,12 +91,12 @@ export default function AuthPage({ onAuthSuccess }) {
                 if (data?.session) {
                     onAuthSuccess(data.session.user);
                 } else {
-                    setMessage('Check your email inbox for a confirmation link!');
+                    setMessage('Check your email inbox/account for activation!');
                 }
             } else {
                 // Sign In
                 const { data, error } = await supabase.auth.signInWithPassword({
-                    email,
+                    email: resolvedEmail,
                     password,
                 });
                 if (error) throw error;
@@ -115,12 +125,13 @@ export default function AuthPage({ onAuthSuccess }) {
         }
 
         try {
-            const { error } = await supabase.auth.resetPasswordForEmail(resetEmail.trim(), {
+            const resolvedEmail = formatAuthEmail(resetEmail);
+            const { error } = await supabase.auth.resetPasswordForEmail(resolvedEmail, {
                 redirectTo: window.location.origin
             });
             if (error) throw error;
             setOtpSent(true);
-            setMessage('A 6-digit password verification code has been sent to your email inbox.');
+            setMessage('A 6-digit password verification code has been sent to your account.');
         } catch (err) {
             setAuthError(err.message || 'Request failed. Please try again.');
         } finally {
@@ -136,9 +147,10 @@ export default function AuthPage({ onAuthSuccess }) {
         setLoading(true);
 
         try {
+            const resolvedEmail = formatAuthEmail(resetEmail);
             // 1. Verify OTP token/code (logs in the user)
             const { data, error } = await supabase.auth.verifyOtp({
-                email: resetEmail.trim(),
+                email: resolvedEmail,
                 token: otpCode.trim(),
                 type: 'recovery'
             });
@@ -246,14 +258,14 @@ export default function AuthPage({ onAuthSuccess }) {
                         /* Part 1: Request OTP email */
                         <form onSubmit={handleRequestOtp} className="auth-form">
                             <div className="form-group">
-                                <label className="form-label" htmlFor="reset-email">Email Address</label>
+                                <label className="form-label" htmlFor="reset-email">Username or Email</label>
                                 <div className="input-wrapper">
                                     <span className="icon-prefix"><Mail size={18} /></span>
                                     <input
                                         id="reset-email"
-                                        type="email"
+                                        type="text"
                                         className="input-field-icon"
-                                        placeholder="email@example.com"
+                                        placeholder="username or email@example.com"
                                         value={resetEmail}
                                         onChange={(e) => setResetEmail(e.target.value)}
                                         required
@@ -402,14 +414,14 @@ export default function AuthPage({ onAuthSuccess }) {
                     )}
 
                     <div className="form-group">
-                        <label className="form-label" htmlFor="auth-email">Email Address</label>
+                        <label className="form-label" htmlFor="auth-email">Username or Email</label>
                         <div className="input-wrapper">
                             <span className="icon-prefix"><Mail size={18} /></span>
                             <input
                                 id="auth-email"
-                                type="email"
+                                type="text"
                                 className="input-field-icon"
-                                placeholder="email@example.com"
+                                placeholder="username or email@example.com"
                                 value={email}
                                 onChange={(e) => setEmail(e.target.value)}
                                 required
