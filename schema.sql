@@ -108,3 +108,44 @@ drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created
   after insert on auth.users
   for each row execute procedure public.handle_new_user();
+
+-- ==========================================================================
+-- Chores-Only Feature Migrations
+-- ==========================================================================
+
+-- 1. Alter Chores Table to support rotations
+ALTER TABLE public.chores ADD COLUMN IF NOT EXISTS rotation_type text DEFAULT 'rotating' NOT NULL;
+ALTER TABLE public.chores ADD COLUMN IF NOT EXISTS rotation_order jsonb DEFAULT '[]'::jsonb;
+ALTER TABLE public.chores ADD COLUMN IF NOT EXISTS last_rotated_at timestamp with time zone;
+
+-- 2. Create Chore History Table
+CREATE TABLE IF NOT EXISTS public.chore_history (
+    id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+    created_at timestamp with time zone DEFAULT timezone('utc'::text, now()) NOT NULL,
+    house_id uuid REFERENCES public.houses(id) ON DELETE CASCADE NOT NULL,
+    chore_id uuid REFERENCES public.chores(id) ON DELETE CASCADE NOT NULL,
+    chore_name text NOT NULL,
+    completed_by uuid REFERENCES public.profiles(id) ON DELETE CASCADE NOT NULL,
+    completed_at timestamp with time zone DEFAULT timezone('utc'::text, now()) NOT NULL,
+    action_type text DEFAULT 'complete' NOT NULL -- 'complete', 'skip', 'swap'
+);
+
+-- 3. Create Chore Notifications Table
+CREATE TABLE IF NOT EXISTS public.chore_notifications (
+    id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+    created_at timestamp with time zone DEFAULT timezone('utc'::text, now()) NOT NULL,
+    house_id uuid REFERENCES public.houses(id) ON DELETE CASCADE NOT NULL,
+    message text NOT NULL,
+    is_read boolean DEFAULT false NOT NULL,
+    profile_id uuid REFERENCES public.profiles(id) ON DELETE CASCADE NOT NULL
+);
+
+-- 4. Enable RLS and add Policies
+ALTER TABLE public.chore_history ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.chore_notifications ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Allow all authenticated users access to chore_history"
+    ON public.chore_history FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+CREATE POLICY "Allow all authenticated users access to chore_notifications"
+    ON public.chore_notifications FOR ALL TO authenticated USING (true) WITH CHECK (true);

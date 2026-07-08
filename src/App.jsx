@@ -1,13 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query';
-import { supabase, clearSupabaseClient } from './supabaseClient';
+import { supabase } from './supabaseClient';
 import AuthPage from './components/AuthPage';
 import HouseSetup from './components/HouseSetup';
 import Layout from './components/Layout';
 import Dashboard from './components/Dashboard';
-import Expenses from './components/Expenses';
 import Chores from './components/Chores';
-import Shopping from './components/Shopping';
+import Calendar from './components/Calendar';
 import { Activity } from 'lucide-react';
 
 const queryClient = new QueryClient({
@@ -131,24 +130,7 @@ function MainAppShell() {
     enabled: !!houseId && !!supabase,
   });
 
-  // 5. Fetch expenses
-  const { data: expenses = [], isLoading: isExpensesLoading } = useQuery({
-    queryKey: ['expenses', houseId],
-    queryFn: async () => {
-      if (!houseId) return [];
-      const { data, error } = await supabase
-        .from('expenses')
-        .select()
-        .eq('house_id', houseId)
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-      return data;
-    },
-    enabled: !!houseId && !!supabase,
-  });
-
-  // 6. Fetch chores
+  // 5. Fetch chores
   const { data: chores = [], isLoading: isChoresLoading } = useQuery({
     queryKey: ['chores', houseId],
     queryFn: async () => {
@@ -165,13 +147,30 @@ function MainAppShell() {
     enabled: !!houseId && !!supabase,
   });
 
-  // 7. Fetch active groceries
-  const { data: shoppingItems = [], isLoading: isShoppingLoading } = useQuery({
-    queryKey: ['shopping_items', houseId],
+  // 6. Fetch chore notifications
+  const { data: notifications = [] } = useQuery({
+    queryKey: ['chore_notifications', user?.id],
+    queryFn: async () => {
+      if (!user) return [];
+      const { data, error } = await supabase
+        .from('chore_notifications')
+        .select()
+        .eq('profile_id', user.id)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      return data;
+    },
+    enabled: !!user && !!supabase,
+  });
+
+  // 7. Fetch chore history
+  const { data: choreHistory = [] } = useQuery({
+    queryKey: ['chore_history', houseId],
     queryFn: async () => {
       if (!houseId) return [];
       const { data, error } = await supabase
-        .from('shopping_items')
+        .from('chore_history')
         .select()
         .eq('house_id', houseId)
         .order('created_at', { ascending: false });
@@ -193,6 +192,82 @@ function MainAppShell() {
   const handleHouseSetupSuccess = () => {
     refetchProfile();
   };
+
+  const handleMarkNotificationRead = async (notificationId) => {
+    if (!supabase) return;
+    await supabase
+      .from('chore_notifications')
+      .update({ is_read: true })
+      .eq('id', notificationId);
+    qc.invalidateQueries(['chore_notifications', user?.id]);
+  };
+
+  // Every Sunday background automatic weekly chore rotation trigger
+  useEffect(() => {
+    if (!supabase || !houseId || chores.length === 0 || houseMembers.length === 0) return;
+
+    const today = new Date();
+    // Get last Sunday at 00:00:00
+    const lastSunday = new Date(today);
+    lastSunday.setDate(today.getDate() - today.getDay());
+    lastSunday.setHours(0, 0, 0, 0);
+
+    const checkAndPerformRotations = async () => {
+      // Find all weekly rotating chores which haven't been rotated since last Sunday
+      const rotatingWeeklyChores = chores.filter(c =>
+        c.frequency === 'weekly' &&
+        c.rotation_type === 'rotating' &&
+        (!c.last_rotated_at || new Date(c.last_rotated_at) < lastSunday)
+      );
+
+      if (rotatingWeeklyChores.length === 0) return;
+
+      for (const chore of rotatingWeeklyChores) {
+        let nextAssigneeId = chore.assigned_to;
+        const order = (chore.rotation_order || []).filter(uid => houseMembers.some(m => m.id === uid));
+        const activeQueue = order.length > 0 ? order : houseMembers.map(m => m.id);
+        const currentIndex = activeQueue.indexOf(chore.assigned_to);
+        const nextIndex = currentIndex !== -1 ? (currentIndex + 1) % activeQueue.length : 0;
+        nextAssigneeId = activeQueue[nextIndex];
+
+        // Shift due date by 7 days
+        const nextDueDate = new Date(chore.due_date || new Date());
+        nextDueDate.setDate(nextDueDate.getDate() + 7);
+
+        // Update chore in database
+        await supabase
+          .from('chores')
+          .update({
+            assigned_to: nextAssigneeId,
+            last_rotated_at: new Date().toISOString(),
+            due_date: nextDueDate.toISOString()
+          })
+          .eq('id', chore.id);
+
+        // History log rotation
+        await supabase.from('chore_history').insert([{
+          house_id: houseId,
+          chore_id: chore.id,
+          chore_name: chore.name,
+          completed_by: profile.id,
+          action_type: 'skip'
+        }]);
+
+        // Alert notice
+        await supabase.from('chore_notifications').insert([{
+          house_id: houseId,
+          message: `Weekly Rotation: "${chore.name}" has been rotated to you for the new week!`,
+          profile_id: nextAssigneeId
+        }]);
+      }
+
+      qc.invalidateQueries(['chores']);
+      qc.invalidateQueries(['chore_history']);
+      qc.invalidateQueries(['chore_notifications', user?.id]);
+    };
+
+    checkAndPerformRotations();
+  }, [chores, houseMembers, houseId, qc, profile?.id, user?.id]);
 
   // Render auth setup if client not created, or user loading
   if (authLoading) {
@@ -234,7 +309,7 @@ function MainAppShell() {
   }
 
   // Wait for other queries if house setup is complete
-  const globalLoading = isHouseLoading || isMembersLoading;
+  const globalLoading = isHouseLoading || isMembersLoading || isChoresLoading;
 
   if (globalLoading) {
     return (
@@ -253,25 +328,16 @@ function MainAppShell() {
       onSignOut={handleSignOut}
       activeTab={activeTab}
       setActiveTab={setActiveTab}
+      notifications={notifications}
+      onMarkNotificationRead={handleMarkNotificationRead}
     >
       {activeTab === 'dashboard' && (
         <Dashboard
           profile={profile}
           house={house}
           houseMembers={houseMembers}
-          expenses={expenses}
           chores={chores}
-          shoppingItems={shoppingItems}
           setActiveTab={setActiveTab}
-        />
-      )}
-
-      {activeTab === 'expenses' && (
-        <Expenses
-          profile={profile}
-          houseId={houseId}
-          houseMembers={houseMembers}
-          expenses={expenses}
         />
       )}
 
@@ -281,15 +347,16 @@ function MainAppShell() {
           houseId={houseId}
           houseMembers={houseMembers}
           chores={chores}
+          choreHistory={choreHistory}
         />
       )}
 
-      {activeTab === 'shopping' && (
-        <Shopping
+      {activeTab === 'calendar' && (
+        <Calendar
           profile={profile}
-          houseId={houseId}
+          house={house}
           houseMembers={houseMembers}
-          shoppingItems={shoppingItems}
+          chores={chores}
         />
       )}
     </Layout>
