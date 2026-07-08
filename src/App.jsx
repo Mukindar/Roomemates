@@ -187,7 +187,6 @@ function MainAppShell() {
       await supabase.auth.signOut();
     }
     setUser(null);
-    clearSupabaseClient();
     window.location.reload();
   };
 
