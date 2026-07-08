@@ -33,7 +33,17 @@ export default function AuthPage({ onAuthSuccess }) {
             setConfigError('Please provide both URL and Anon Key.');
             return;
         }
-        const success = setupSupabaseClient(dbUrl, dbKey);
+
+        let cleanUrl = dbUrl.trim();
+        try {
+            // Strip index path segments like /rest/v1/ to keep origin base URL
+            const parsedUrl = new URL(cleanUrl);
+            cleanUrl = parsedUrl.origin;
+        } catch (err) {
+            // Fallback to trim config
+        }
+
+        const success = setupSupabaseClient(cleanUrl, dbKey);
         if (success) {
             setNeedsConfig(false);
         } else {
