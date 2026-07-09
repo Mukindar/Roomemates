@@ -135,6 +135,7 @@ a:hover {
 /* Layout Utilities */
 .app-layout {
   min-height: 100vh;
+  height: 100vh;
   display: flex;
   background-color: var(--bg-primary);
   position: relative;
@@ -1097,4 +1098,144 @@ a:hover {
   transform: translateY(-2px);
   border-color: var(--accent-primary);
   box-shadow: 0 4px 20px rgba(139, 92, 246, 0.15);
+}
+
+/* ==========================================================================
+   Mobile Responsive Layout
+   ========================================================================== */
+
+/* Hide mobile elements on desktop */
+.mobile-topbar,
+.mobile-bottom-nav {
+  display: none;
+}
+
+/* ── MOBILE BREAKPOINT (≤ 768px) ─────────────────────────────────── */
+@media (max-width: 768px) {
+
+  /* Kill the desktop sidebar */
+  .sidebar {
+    display: none;
+  }
+
+  /* Vertical flex layout: topbar → content → bottom nav */
+  .app-layout {
+    flex-direction: column;
+  }
+
+  /* Content pane fills remaining height between topbar & bottom nav */
+  .content-pane {
+    flex: 1;
+    height: auto;
+    padding: 16px 14px 80px 14px;
+    /* bottom padding clears bottom nav */
+    overflow-y: auto;
+  }
+
+  /* Show mobile UI */
+  .mobile-topbar,
+  .mobile-bottom-nav {
+    display: flex;
+  }
+
+  /* Section headers become column-wrapped on narrow screens */
+  .section-header {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .section-header>div:last-child {
+    width: 100%;
+  }
+
+  /* Modals go full-width on mobile */
+  .modal-content {
+    max-width: calc(100vw - 24px);
+    margin: 0 12px;
+    max-height: 92vh;
+  }
+
+  /* Chore sub-tabs scroll horizontally */
+  .chore-subtab-row {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 4px;
+  }
+
+  /* Welcome banner font scaling */
+  .welcome-banner h1 {
+    font-size: 1.6rem;
+  }
+
+  .section-header h2 {
+    font-size: 1.35rem;
+  }
+}
+
+/* ── MOBILE TOP BAR ──────────────────────────────────────────────── */
+.mobile-topbar {
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  z-index: 50;
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+}
+
+/* ── MOBILE BOTTOM NAV ───────────────────────────────────────────── */
+.mobile-bottom-nav {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-color);
+  z-index: 50;
+  padding: 6px 0 env(safe-area-inset-bottom, 6px) 0;
+  justify-content: space-around;
+}
+
+.mobile-nav-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  flex: 1;
+  padding: 6px 4px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 0.65rem;
+  font-family: var(--font-sans);
+  font-weight: 500;
+  transition: color 0.2s;
+  min-height: 48px;
+}
+
+.mobile-nav-item.active {
+  color: var(--accent-primary);
+}
+
+.mobile-nav-item.active svg {
+  filter: drop-shadow(0 0 6px rgba(139, 92, 246, 0.5));
+}
+
+.mobile-nav-item span {
+  line-height: 1;
+}
+
+/* ── SLIDE-IN ANIMATION ──────────────────────────────────────────── */
+@keyframes slideInRight {
+  from {
+    transform: translateX(100%);
+  }
+
+  to {
+    transform: translateX(0);
+  }
 }

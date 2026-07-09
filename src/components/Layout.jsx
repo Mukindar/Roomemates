@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Home, Calendar, CheckSquare, Bell, LogOut, Copy, Check, Users } from 'lucide-react';
+import { Home, Calendar, CheckSquare, Bell, LogOut, Copy, Check, Users, Menu, X, ArrowLeftRight } from 'lucide-react';
 
 export default function Layout({
     profile,
@@ -14,6 +14,7 @@ export default function Layout({
 }) {
     const [copied, setCopied] = useState(false);
     const [showNotifDropdown, setShowNotifDropdown] = useState(false);
+    const [showMobileDrawer, setShowMobileDrawer] = useState(false);
 
     const handleCopyCode = () => {
         if (!house?.invite_code) return;
@@ -30,13 +31,69 @@ export default function Layout({
 
     const unreadCount = notifications.filter(n => !n.is_read).length;
 
+    const notifDropdown = (
+        <div className="glass-card" style={{
+            position: 'absolute',
+            top: '42px',
+            right: '0',
+            width: '280px',
+            maxHeight: '350px',
+            overflowY: 'auto',
+            zIndex: 200,
+            padding: '12px',
+            backgroundColor: 'var(--bg-tertiary)',
+            boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.4)',
+            border: '1px solid rgba(255, 255, 255, 0.15)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '8px'
+        }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255, 255, 255, 0.1)', paddingBottom: '6px', marginBottom: '4px' }}>
+                <strong style={{ fontSize: '0.9rem' }}>Notifications</strong>
+                {unreadCount > 0 && (
+                    <button
+                        onClick={() => notifications.forEach(n => !n.is_read && onMarkNotificationRead(n.id))}
+                        style={{ background: 'none', border: 'none', color: 'var(--accent-purple)', fontSize: '0.75rem', cursor: 'pointer' }}
+                    >
+                        Mark all read
+                    </button>
+                )}
+            </div>
+            {notifications.length === 0 ? (
+                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textAlign: 'center', padding: '12px 0' }}>No notifications</p>
+            ) : (
+                notifications.map(notif => (
+                    <div
+                        key={notif.id}
+                        onClick={() => !notif.is_read && onMarkNotificationRead(notif.id)}
+                        style={{
+                            padding: '8px 10px',
+                            borderRadius: '6px',
+                            background: notif.is_read ? 'rgba(255, 255, 255, 0.02)' : 'rgba(168, 85, 247, 0.08)',
+                            borderLeft: notif.is_read ? 'none' : '3px solid var(--accent-purple)',
+                            fontSize: '0.8rem',
+                            cursor: 'pointer',
+                            transition: 'background 0.2s',
+                            textAlign: 'left'
+                        }}
+                    >
+                        <p style={{ margin: '0 0 4px 0', lineHeight: 1.3 }}>{notif.message}</p>
+                        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                            {new Date(notif.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                    </div>
+                ))
+            )}
+        </div>
+    );
+
     return (
         <div className="app-layout">
             {/* Background Glows */}
             <div className="glow-spot-1"></div>
             <div className="glow-spot-2"></div>
 
-            {/* Sidebar Panel */}
+            {/* ── DESKTOP SIDEBAR ─────────────────────────────────────── */}
             <aside className="sidebar">
                 <div
                     onClick={() => setActiveTab('dashboard')}
@@ -52,7 +109,7 @@ export default function Layout({
                     {/* Notification Bell */}
                     <div style={{ position: 'relative', marginLeft: 'auto' }}>
                         <button
-                            onClick={() => setShowNotifDropdown(!showNotifDropdown)}
+                            onClick={(e) => { e.stopPropagation(); setShowNotifDropdown(!showNotifDropdown); }}
                             style={{
                                 background: 'rgba(255, 255, 255, 0.05)',
                                 border: '1px solid rgba(255, 255, 255, 0.1)',
@@ -88,62 +145,7 @@ export default function Layout({
                                 </span>
                             )}
                         </button>
-
-                        {showNotifDropdown && (
-                            <div className="glass-card" style={{
-                                position: 'absolute',
-                                top: '42px',
-                                left: '-200px',
-                                width: '280px',
-                                maxHeight: '350px',
-                                overflowY: 'auto',
-                                zIndex: 100,
-                                padding: '12px',
-                                backgroundColor: 'var(--bg-tertiary)',
-                                boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.4)',
-                                border: '1px solid rgba(255, 255, 255, 0.15)',
-                                display: 'flex',
-                                flexDirection: 'column',
-                                gap: '8px'
-                            }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255, 255, 255, 0.1)', paddingBottom: '6px', marginBottom: '4px' }}>
-                                    <strong style={{ fontSize: '0.9rem' }}>Notifications</strong>
-                                    {unreadCount > 0 && (
-                                        <button
-                                            onClick={() => notifications.forEach(n => !n.is_read && onMarkNotificationRead(n.id))}
-                                            style={{ background: 'none', border: 'none', color: 'var(--accent-purple)', fontSize: '0.75rem', cursor: 'pointer' }}
-                                        >
-                                            Mark all read
-                                        </button>
-                                    )}
-                                </div>
-                                {notifications.length === 0 ? (
-                                    <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textAlign: 'center', padding: '12px 0' }}>No notifications</p>
-                                ) : (
-                                    notifications.map(notif => (
-                                        <div
-                                            key={notif.id}
-                                            onClick={() => !notif.is_read && onMarkNotificationRead(notif.id)}
-                                            style={{
-                                                padding: '8px 10px',
-                                                borderRadius: '6px',
-                                                background: notif.is_read ? 'rgba(255, 255, 255, 0.02)' : 'rgba(168, 85, 247, 0.08)',
-                                                borderLeft: notif.is_read ? 'none' : '3px solid var(--accent-purple)',
-                                                fontSize: '0.8rem',
-                                                cursor: 'pointer',
-                                                transition: 'background 0.2s',
-                                                textAlign: 'left'
-                                            }}
-                                        >
-                                            <p style={{ margin: '0 0 4px 0', lineHeight: 1.3 }}>{notif.message}</p>
-                                            <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                                                {new Date(notif.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                            </span>
-                                        </div>
-                                    ))
-                                )}
-                            </div>
-                        )}
+                        {showNotifDropdown && notifDropdown}
                     </div>
                 </div>
 
@@ -155,11 +157,7 @@ export default function Layout({
                         </span>
                         <div className="house-code-display justify-between">
                             <code>{house.invite_code}</code>
-                            <button
-                                onClick={handleCopyCode}
-                                className="share-btn"
-                                title="Copy Invite Code"
-                            >
+                            <button onClick={handleCopyCode} className="share-btn" title="Copy Invite Code">
                                 {copied ? <Check size={14} className="text-success" /> : <Copy size={14} />}
                             </button>
                         </div>
@@ -222,12 +220,164 @@ export default function Layout({
                 </div>
             </aside>
 
-            {/* Main Panel Content Pane */}
+            {/* ── MOBILE TOP BAR ──────────────────────────────────────── */}
+            <header className="mobile-topbar">
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <div className="logo-icon purple-gradient" style={{ width: '32px', height: '32px', borderRadius: '8px', flexShrink: 0 }}>
+                        <Users size={16} />
+                    </div>
+                    <span className="sidebar-logo" style={{ fontSize: '1.1rem' }}>{house?.name || 'Roomemates'}</span>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: 'auto' }}>
+                    {/* Bell */}
+                    <div style={{ position: 'relative' }}>
+                        <button
+                            onClick={() => setShowNotifDropdown(!showNotifDropdown)}
+                            style={{
+                                background: 'rgba(255,255,255,0.05)',
+                                border: '1px solid rgba(255,255,255,0.1)',
+                                width: '34px', height: '34px',
+                                borderRadius: '50%',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                color: 'var(--text-primary)', cursor: 'pointer', position: 'relative'
+                            }}
+                        >
+                            <Bell size={16} />
+                            {unreadCount > 0 && (
+                                <span style={{
+                                    position: 'absolute', top: '-2px', right: '-2px',
+                                    background: 'var(--accent-purple)', color: 'white',
+                                    fontSize: '0.6rem', width: '15px', height: '15px',
+                                    borderRadius: '50%', display: 'flex', alignItems: 'center',
+                                    justifyContent: 'center', fontWeight: 'bold'
+                                }}>{unreadCount}</span>
+                            )}
+                        </button>
+                        {showNotifDropdown && notifDropdown}
+                    </div>
+
+                    {/* Hamburger */}
+                    <button
+                        onClick={() => setShowMobileDrawer(true)}
+                        style={{
+                            background: 'rgba(255,255,255,0.05)',
+                            border: '1px solid rgba(255,255,255,0.1)',
+                            width: '34px', height: '34px',
+                            borderRadius: '8px',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            color: 'var(--text-primary)', cursor: 'pointer'
+                        }}
+                    >
+                        <Menu size={18} />
+                    </button>
+                </div>
+            </header>
+
+            {/* ── MOBILE SLIDE-OUT DRAWER ─────────────────────────────── */}
+            {showMobileDrawer && (
+                <div
+                    style={{
+                        position: 'fixed', inset: 0, zIndex: 300,
+                        background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)'
+                    }}
+                    onClick={() => setShowMobileDrawer(false)}
+                >
+                    <div
+                        onClick={(e) => e.stopPropagation()}
+                        style={{
+                            position: 'absolute', top: 0, right: 0,
+                            width: '260px', height: '100%',
+                            background: 'var(--bg-secondary)',
+                            borderLeft: '1px solid var(--border-color)',
+                            display: 'flex', flexDirection: 'column',
+                            padding: '20px', gap: '20px',
+                            animation: 'slideInRight 0.2s ease'
+                        }}
+                    >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ fontWeight: '700', fontSize: '1rem', color: 'var(--text-primary)' }}>Menu</span>
+                            <button
+                                onClick={() => setShowMobileDrawer(false)}
+                                style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}
+                            >
+                                <X size={20} />
+                            </button>
+                        </div>
+
+                        {/* Profile */}
+                        <div
+                            onClick={() => { setActiveTab('dashboard'); setShowMobileDrawer(false); }}
+                            className="user-badge"
+                            style={{ cursor: 'pointer', padding: '10px', background: 'var(--bg-tertiary)', borderRadius: '8px' }}
+                        >
+                            <div className="user-avatar">
+                                {profile?.name ? profile.name.charAt(0).toUpperCase() : 'U'}
+                            </div>
+                            <div className="user-info">
+                                <span className="user-name">{profile?.name || 'Roommate'}</span>
+                                <span className="house-name-text">{house?.name || 'No House'}</span>
+                            </div>
+                        </div>
+
+                        {/* Invite code */}
+                        {house && (
+                            <div>
+                                <span className="form-label" style={{ fontSize: '0.7rem', display: 'block', marginBottom: '6px' }}>
+                                    House Invite Code
+                                </span>
+                                <div className="house-code-display justify-between">
+                                    <code style={{ fontSize: '0.85rem' }}>{house.invite_code}</code>
+                                    <button onClick={handleCopyCode} className="share-btn" title="Copy">
+                                        {copied ? <Check size={14} className="text-success" /> : <Copy size={14} />}
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Actions */}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: 'auto' }}>
+                            <button
+                                onClick={() => { onSwitchHouse(); setShowMobileDrawer(false); }}
+                                className="btn btn-secondary"
+                                style={{ width: '100%', justifyContent: 'center' }}
+                            >
+                                <ArrowLeftRight size={14} style={{ marginRight: '6px' }} />
+                                Switch House
+                            </button>
+                            <button
+                                onClick={onSignOut}
+                                className="btn btn-secondary"
+                                style={{ width: '100%', justifyContent: 'center', color: '#ef4444' }}
+                            >
+                                <LogOut size={14} style={{ marginRight: '6px' }} />
+                                Log Out
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ── MAIN PANEL ──────────────────────────────────────────── */}
             <main className="content-pane">
                 <div className="container" style={{ padding: 0 }}>
                     {children}
                 </div>
             </main>
+
+            {/* ── MOBILE BOTTOM NAV ───────────────────────────────────── */}
+            <nav className="mobile-bottom-nav">
+                {navItems.map(item => (
+                    <button
+                        key={item.id}
+                        onClick={() => setActiveTab(item.id)}
+                        className={`mobile-nav-item ${activeTab === item.id ? 'active' : ''}`}
+                    >
+                        {item.icon}
+                        <span>{item.label}</span>
+                    </button>
+                ))}
+            </nav>
         </div>
     );
 }
