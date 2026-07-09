@@ -27,7 +27,7 @@ export default function Dashboard({ profile, house, houseMembers, chores, setAct
             const isOneOffCompleted = chore.frequency === 'one-off' && chore.last_completed_at;
             if (isOneOffCompleted) {
                 const completedDateStr = new Date(chore.last_completed_at).toISOString().split('T')[0];
-                if (completedDateStr === todayStr) {
+                if (completedDateStr === todayStr && chore.last_completed_by === profile.id) {
                     completedToday.push(chore);
                 }
                 return;
@@ -35,29 +35,37 @@ export default function Dashboard({ profile, house, houseMembers, chores, setAct
 
             if (chore.last_completed_at) {
                 const completedDateStr = new Date(chore.last_completed_at).toISOString().split('T')[0];
-                if (completedDateStr === todayStr) {
+                if (completedDateStr === todayStr && chore.last_completed_by === profile.id) {
                     completedToday.push(chore);
                 }
             }
 
             if (!chore.due_date) {
-                upcoming.push(chore);
+                if (chore.assigned_to === profile.id || !chore.assigned_to) {
+                    upcoming.push(chore);
+                }
                 return;
             }
 
             const dueDateStr = new Date(chore.due_date).toISOString().split('T')[0];
 
             if (dueDateStr < todayStr) {
-                overdue.push(chore);
+                if (chore.assigned_to === profile.id || !chore.assigned_to) {
+                    overdue.push(chore);
+                }
             } else if (dueDateStr === todayStr) {
-                today.push(chore);
+                if (chore.assigned_to === profile.id || !chore.assigned_to) {
+                    today.push(chore);
+                }
             } else {
-                upcoming.push(chore);
+                if (chore.assigned_to === profile.id || !chore.assigned_to) {
+                    upcoming.push(chore);
+                }
             }
         });
 
         return { today, upcoming, overdue, completedToday, pendingApproval };
-    }, [chores]);
+    }, [chores, profile.id]);
 
     // Mutation to Claim Completion (marks chore as pending approval)
     const claimChoreMutation = useMutation({
@@ -66,7 +74,8 @@ export default function Dashboard({ profile, house, houseMembers, chores, setAct
                 .from('chores')
                 .update({
                     is_pending_approval: true,
-                    pending_completed_by: profile.id
+                    pending_completed_by: profile.id,
+                    approval_claimed_at: new Date().toISOString()
                 })
                 .eq('id', chore.id);
             if (error) throw error;
@@ -94,7 +103,8 @@ export default function Dashboard({ profile, house, houseMembers, chores, setAct
                 last_completed_at: new Date().toISOString(),
                 last_completed_by: claimantId,
                 is_pending_approval: false,
-                pending_completed_by: null
+                pending_completed_by: null,
+                approval_claimed_at: null
             };
 
             let nextAssigneeId = currentAssigneeId;
@@ -171,7 +181,8 @@ export default function Dashboard({ profile, house, houseMembers, chores, setAct
                 .from('chores')
                 .update({
                     is_pending_approval: false,
-                    pending_completed_by: null
+                    pending_completed_by: null,
+                    approval_claimed_at: null
                 })
                 .eq('id', choreId);
             if (error) throw error;
@@ -258,7 +269,7 @@ export default function Dashboard({ profile, house, houseMembers, chores, setAct
 
             {/* Stats Cards */}
             <div className="stats-grid">
-                <div className="stat-card glass-card">
+                <div className="stat-card glass-card clickable-card" onClick={() => setActiveTab('chores')}>
                     <div className="stat-icon warning-bg">
                         <AlertTriangle size={24} />
                     </div>
@@ -268,7 +279,7 @@ export default function Dashboard({ profile, house, houseMembers, chores, setAct
                     </div>
                 </div>
 
-                <div className="stat-card glass-card">
+                <div className="stat-card glass-card clickable-card" onClick={() => setActiveTab('chores')}>
                     <div className="stat-icon purple-bg">
                         <Clock size={24} />
                     </div>
@@ -278,7 +289,7 @@ export default function Dashboard({ profile, house, houseMembers, chores, setAct
                     </div>
                 </div>
 
-                <div className="stat-card glass-card">
+                <div className="stat-card glass-card clickable-card" onClick={() => setActiveTab('chores')}>
                     <div className="stat-icon success-bg">
                         <CheckCircle size={24} />
                     </div>
@@ -288,7 +299,7 @@ export default function Dashboard({ profile, house, houseMembers, chores, setAct
                     </div>
                 </div>
 
-                <div className="stat-card glass-card">
+                <div className="stat-card glass-card clickable-card" onClick={() => setActiveTab('chores')}>
                     <div className="stat-icon cyan-bg">
                         <CheckSquare size={24} />
                     </div>

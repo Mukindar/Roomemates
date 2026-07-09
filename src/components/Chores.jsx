@@ -54,7 +54,8 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
                 .from('chores')
                 .update({
                     is_pending_approval: true,
-                    pending_completed_by: profile.id
+                    pending_completed_by: profile.id,
+                    approval_claimed_at: new Date().toISOString()
                 })
                 .eq('id', chore.id);
             if (error) throw error;

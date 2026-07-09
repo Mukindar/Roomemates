@@ -161,3 +161,6 @@ ALTER TABLE public.chores ADD COLUMN IF NOT EXISTS pending_completed_by uuid REF
 -- 2. Alter history table to track ratings and validation details
 ALTER TABLE public.chore_history ADD COLUMN IF NOT EXISTS rating integer CHECK (rating >= 1 AND rating <= 5);
 ALTER TABLE public.chore_history ADD COLUMN IF NOT EXISTS approved_by uuid REFERENCES public.profiles(id);
+
+-- 3. Alter chores table to track claim timestamp
+ALTER TABLE public.chores ADD COLUMN IF NOT EXISTS approval_claimed_at timestamp with time zone;

@@ -87,7 +87,7 @@ export default function Layout({
                             <div className="glass-card" style={{
                                 position: 'absolute',
                                 top: '42px',
-                                right: 0,
+                                left: '-200px',
                                 width: '280px',
                                 maxHeight: '350px',
                                 overflowY: 'auto',

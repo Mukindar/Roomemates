@@ -1087,3 +1087,14 @@ a:hover {
 .share-btn:hover {
   color: var(--accent-secondary);
 }
+
+.clickable-card {
+  cursor: pointer;
+  transition: transform 0.2s, border-color 0.2s, box-shadow 0.2s;
+}
+
+.clickable-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--accent-primary);
+  box-shadow: 0 4px 20px rgba(139, 92, 246, 0.15);
+}

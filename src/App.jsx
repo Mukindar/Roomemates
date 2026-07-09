@@ -269,6 +269,96 @@ function MainAppShell() {
     checkAndPerformRotations();
   }, [chores, houseMembers, houseId, qc, profile?.id, user?.id]);
 
+  // 8. Auto-approve chores pending review for > 12 hours
+  useEffect(() => {
+    if (!supabase || !houseId || chores.length === 0 || houseMembers.length === 0) return;
+
+    const autoApproveItems = async () => {
+      const now = new Date();
+      const pendingClaims = chores.filter(c =>
+        c.is_pending_approval &&
+        c.approval_claimed_at &&
+        (now - new Date(c.approval_claimed_at)) >= 12 * 60 * 60 * 1000
+      );
+
+      if (pendingClaims.length === 0) return;
+
+      for (const chore of pendingClaims) {
+        const claimantId = chore.pending_completed_by;
+        if (!claimantId) continue;
+
+        let updateFields = {
+          last_completed_at: now.toISOString(),
+          last_completed_by: claimantId,
+          is_pending_approval: false,
+          pending_completed_by: null,
+          approval_claimed_at: null
+        };
+
+        let nextAssigneeId = chore.assigned_to;
+
+        // Rotate if recurring
+        if (chore.frequency !== 'one-off' && houseMembers.length > 1) {
+          const order = (chore.rotation_order || []).filter(uid => houseMembers.some(m => m.id === uid));
+          const activeQueue = order.length > 0 ? order : houseMembers.map(m => m.id);
+          const currentIndex = activeQueue.indexOf(claimantId);
+          const nextIndex = currentIndex !== -1 ? (currentIndex + 1) % activeQueue.length : 0;
+          nextAssigneeId = activeQueue[nextIndex];
+          updateFields.assigned_to = nextAssigneeId;
+        }
+
+        if (chore.frequency !== 'one-off') {
+          const nextDueDate = new Date(chore.due_date || now);
+          if (chore.frequency === 'daily') {
+            nextDueDate.setDate(nextDueDate.getDate() + 1);
+          } else if (chore.frequency === 'weekly') {
+            nextDueDate.setDate(nextDueDate.getDate() + 7);
+          } else if (chore.frequency === 'monthly') {
+            nextDueDate.setMonth(nextDueDate.getMonth() + 1);
+          }
+          updateFields.due_date = nextDueDate.toISOString();
+        }
+
+        // Apply automatic approval database update
+        await supabase
+          .from('chores')
+          .update(updateFields)
+          .eq('id', chore.id);
+
+        // History entry
+        await supabase.from('chore_history').insert([{
+          house_id: houseId,
+          chore_id: chore.id,
+          chore_name: chore.name,
+          completed_by: claimantId,
+          action_type: 'complete',
+          rating: 5
+        }]);
+
+        // Notification
+        await supabase.from('chore_notifications').insert([{
+          house_id: houseId,
+          message: `Your completion claim for "${chore.name}" was auto-approved after 12 hours.`,
+          profile_id: claimantId
+        }]);
+
+        if (nextAssigneeId !== claimantId) {
+          await supabase.from('chore_notifications').insert([{
+            house_id: houseId,
+            message: `Weekly Rotation: "${chore.name}" has been rotated to you.`,
+            profile_id: nextAssigneeId
+          }]);
+        }
+      }
+
+      qc.invalidateQueries(['chores']);
+      qc.invalidateQueries(['chore_history']);
+      qc.invalidateQueries(['chore_notifications', user?.id]);
+    };
+
+    autoApproveItems();
+  }, [chores, houseMembers, houseId, qc, user?.id]);
+
   // Render auth setup if client not created, or user loading
   if (authLoading) {
     return (
