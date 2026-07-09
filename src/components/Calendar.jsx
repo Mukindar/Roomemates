@@ -254,20 +254,38 @@ export default function Calendar({ profile, house, houseMembers, chores }) {
                                             const assignee = houseMembers.find(m => m.id === chore.assigned_to);
                                             const initials = assignee ? assignee.name.substring(0, 2).toUpperCase() : '??';
                                             const isDone = chore.frequency === 'one-off' && chore.last_completed_at;
+                                            const isPending = chore.is_pending_approval;
+
+                                            let bg = 'rgba(168, 85, 247, 0.15)';
+                                            let border = '1px solid rgba(168, 85, 247, 0.3)';
+                                            let color = '#c084fc';
+                                            let titleText = `Assigned: ${assignee ? assignee.name : 'Anyone'} (${chore.frequency})\nClick to claim completion`;
+
+                                            if (isDone) {
+                                                bg = 'rgba(34, 197, 94, 0.15)';
+                                                border = '1px solid rgba(34, 197, 94, 0.3)';
+                                                color = '#22c55e';
+                                                titleText = `Completed`;
+                                            } else if (isPending) {
+                                                bg = 'rgba(234, 179, 8, 0.15)';
+                                                border = '1px dashed rgba(234, 179, 8, 0.6)';
+                                                color = '#eab308';
+                                                titleText = `Pending Approval by roommates`;
+                                            }
 
                                             return (
                                                 <div
                                                     key={chore.id}
-                                                    onClick={() => !isDone && handleCompleteChore(chore)}
-                                                    title={`Assigned: ${assignee ? assignee.name : 'Anyone'} (${chore.frequency})\nClick to complete`}
+                                                    onClick={() => !isDone && !isPending && handleCompleteChore(chore)}
+                                                    title={titleText}
                                                     style={{
                                                         fontSize: '0.65rem',
                                                         padding: '3px 6px',
                                                         borderRadius: '4px',
-                                                        background: isDone ? 'rgba(34, 197, 94, 0.15)' : 'rgba(168, 85, 247, 0.15)',
-                                                        border: isDone ? '1px solid rgba(34, 197, 94, 0.3)' : '1px solid rgba(168, 85, 247, 0.3)',
-                                                        color: isDone ? '#22c55e' : '#c084fc',
-                                                        cursor: isDone ? 'default' : 'pointer',
+                                                        background: bg,
+                                                        border: border,
+                                                        color: color,
+                                                        cursor: isDone || isPending ? 'default' : 'pointer',
                                                         display: 'flex',
                                                         justifyContent: 'space-between',
                                                         alignItems: 'center'

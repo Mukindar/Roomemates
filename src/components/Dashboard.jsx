@@ -1,10 +1,11 @@
-import React, { useMemo } from 'react';
-import { Home, Calendar, CheckSquare, Clock, AlertTriangle, CheckCircle, ArrowRight, Users } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { Home, Calendar, CheckSquare, Clock, AlertTriangle, CheckCircle, ArrowRight, Users, Star } from 'lucide-react';
 import { supabase } from '../supabaseClient';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 export default function Dashboard({ profile, house, houseMembers, chores, setActiveTab }) {
     const queryClient = useQueryClient();
+    const [starRatings, setStarRatings] = useState({}); // { choreId: rating }
 
     // Group and filter chores by deadline
     const stats = useMemo(() => {
@@ -14,12 +15,17 @@ export default function Dashboard({ profile, house, houseMembers, chores, setAct
         const upcoming = [];
         const overdue = [];
         const completedToday = [];
+        const pendingApproval = [];
 
         chores.forEach(chore => {
-            // Check if one-off is already completed
+            // Check if chore is pending validation/approval
+            if (chore.is_pending_approval) {
+                pendingApproval.push(chore);
+                return;
+            }
+
             const isOneOffCompleted = chore.frequency === 'one-off' && chore.last_completed_at;
             if (isOneOffCompleted) {
-                // If completed today
                 const completedDateStr = new Date(chore.last_completed_at).toISOString().split('T')[0];
                 if (completedDateStr === todayStr) {
                     completedToday.push(chore);
@@ -27,7 +33,6 @@ export default function Dashboard({ profile, house, houseMembers, chores, setAct
                 return;
             }
 
-            // check if recurring got completed today (due date shifted, last completed is today)
             if (chore.last_completed_at) {
                 const completedDateStr = new Date(chore.last_completed_at).toISOString().split('T')[0];
                 if (completedDateStr === todayStr) {
@@ -51,27 +56,56 @@ export default function Dashboard({ profile, house, houseMembers, chores, setAct
             }
         });
 
-        return { today, upcoming, overdue, completedToday };
+        return { today, upcoming, overdue, completedToday, pendingApproval };
     }, [chores]);
 
-    // Mutation for completing a chore from the dashboard
-    const completeChoreMutation = useMutation({
-        mutationFn: async ({ choreId, currentAssigneeId, frequency, currentDueDate, name }) => {
+    // Mutation to Claim Completion (marks chore as pending approval)
+    const claimChoreMutation = useMutation({
+        mutationFn: async (chore) => {
+            const { error } = await supabase
+                .from('chores')
+                .update({
+                    is_pending_approval: true,
+                    pending_completed_by: profile.id
+                })
+                .eq('id', chore.id);
+            if (error) throw error;
+
+            // Generate notification for other roommates
+            const otherMembers = houseMembers.filter(m => m.id !== profile.id);
+            for (const member of otherMembers) {
+                await supabase.from('chore_notifications').insert([{
+                    house_id: house.id,
+                    message: `${profile.name} claims they completed "${chore.name}". Please approve and rate!`,
+                    profile_id: member.id
+                }]);
+            }
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries(['chores']);
+            queryClient.invalidateQueries(['chore_notifications']);
+        }
+    });
+
+    // Mutation for final approval of a chore
+    const approveChoreMutation = useMutation({
+        mutationFn: async ({ choreId, currentAssigneeId, frequency, currentDueDate, name, rating, claimantId }) => {
             let updateFields = {
                 last_completed_at: new Date().toISOString(),
-                last_completed_by: profile.id
+                last_completed_by: claimantId,
+                is_pending_approval: false,
+                pending_completed_by: null
             };
 
             let nextAssigneeId = currentAssigneeId;
 
             // Rotate assignee if recurring
             if (frequency !== 'one-off' && houseMembers.length > 1) {
-                // Determine order array
-                const order = (chores.find(c => c.id === choreId)?.rotation_order || [])
-                    .filter(uid => houseMembers.some(m => m.id === uid)); // Filter active only
-
+                const targetChore = chores.find(c => c.id === choreId);
+                const order = (targetChore?.rotation_order || []).filter(uid => houseMembers.some(m => m.id === uid));
                 const activeQueue = order.length > 0 ? order : houseMembers.map(m => m.id);
-                const currentIndex = activeQueue.indexOf(currentAssigneeId);
+                // Shift next turn to next person in queue starting from claimant
+                const currentIndex = activeQueue.indexOf(claimantId);
                 const nextIndex = currentIndex !== -1 ? (currentIndex + 1) % activeQueue.length : 0;
                 nextAssigneeId = activeQueue[nextIndex];
                 updateFields.assigned_to = nextAssigneeId;
@@ -96,21 +130,29 @@ export default function Dashboard({ profile, house, houseMembers, chores, setAct
                 .eq('id', choreId);
             if (choreErr) throw choreErr;
 
-            // Insert History
+            // Insert History with Rating and Approver details
             await supabase.from('chore_history').insert([{
                 house_id: house.id,
                 chore_id: choreId,
                 chore_name: name,
-                completed_by: profile.id,
-                action_type: 'complete'
+                completed_by: claimantId,
+                action_type: 'complete',
+                rating: rating,
+                approved_by: profile.id
+            }]);
+
+            // Add notification to the claimant
+            await supabase.from('chore_notifications').insert([{
+                house_id: house.id,
+                message: `Your completion of "${name}" was approved with a ${rating}-star rating!`,
+                profile_id: claimantId
             }]);
 
             // Add notification if assignee changed
-            if (nextAssigneeId !== currentAssigneeId) {
-                const nextUser = houseMembers.find(m => m.id === nextAssigneeId);
+            if (nextAssigneeId !== claimantId) {
                 await supabase.from('chore_notifications').insert([{
                     house_id: house.id,
-                    message: `${profile.name} completed "${name}". Next turn is yours!`,
+                    message: `${name} has been rotated. Next turn is yours!`,
                     profile_id: nextAssigneeId
                 }]);
             }
@@ -122,12 +164,70 @@ export default function Dashboard({ profile, house, houseMembers, chores, setAct
         }
     });
 
+    // Mutation to reject a completion claim
+    const rejectChoreMutation = useMutation({
+        mutationFn: async ({ choreId, claimantId, name }) => {
+            const { error } = await supabase
+                .from('chores')
+                .update({
+                    is_pending_approval: false,
+                    pending_completed_by: null
+                })
+                .eq('id', choreId);
+            if (error) throw error;
+
+            // Log notification to claimant
+            await supabase.from('chore_notifications').insert([{
+                house_id: house.id,
+                message: `Your completion claim for "${name}" was rejected. Please review the chore.`,
+                profile_id: claimantId
+            }]);
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries(['chores']);
+            queryClient.invalidateQueries(['chore_notifications']);
+        }
+    });
+
     const handleQuickComplete = (chore) => {
-        completeChoreMutation.mutate({
+        if (houseMembers.length <= 1) {
+            // Complete immediately if sole roommate
+            approveChoreMutation.mutate({
+                choreId: chore.id,
+                currentAssigneeId: chore.assigned_to,
+                frequency: chore.frequency,
+                currentDueDate: chore.due_date,
+                name: chore.name,
+                rating: 5,
+                claimantId: profile.id
+            });
+        } else {
+            claimChoreMutation.mutate(chore);
+        }
+    };
+
+    const handleSelectStar = (choreId, ratingValue) => {
+        setStarRatings({ ...starRatings, [choreId]: ratingValue });
+    };
+
+    const handleApproveClaim = (chore) => {
+        const rating = starRatings[chore.id] || 5; // Default to 5 stars if not selected
+        approveChoreMutation.mutate({
             choreId: chore.id,
             currentAssigneeId: chore.assigned_to,
             frequency: chore.frequency,
             currentDueDate: chore.due_date,
+            name: chore.name,
+            rating: rating,
+            claimantId: chore.pending_completed_by
+        });
+    };
+
+    const handleRejectClaim = (chore) => {
+        if (!confirm(`Are you sure you want to reject the completion claim for "${chore.name}"?`)) return;
+        rejectChoreMutation.mutate({
+            choreId: chore.id,
+            claimantId: chore.pending_completed_by,
             name: chore.name
         });
     };
@@ -143,6 +243,11 @@ export default function Dashboard({ profile, house, houseMembers, chores, setAct
         const nextUser = houseMembers.find(m => m.id === activeQueue[nextIndex]);
         return nextUser ? nextUser.name : 'Unknown';
     };
+
+    // Filtering verifications where current user is NOT claimant (unless only member)
+    const verificationsRequired = useMemo(() => {
+        return stats.pendingApproval.filter(c => houseMembers.length === 1 || c.pending_completed_by !== profile.id);
+    }, [stats.pendingApproval, houseMembers, profile.id]);
 
     return (
         <div>
@@ -189,7 +294,7 @@ export default function Dashboard({ profile, house, houseMembers, chores, setAct
                     </div>
                     <div className="stat-info">
                         <span className="stat-value">
-                            {chores.filter(c => c.assigned_to === profile.id && (c.frequency !== 'one-off' || !c.last_completed_at)).length}
+                            {chores.filter(c => c.assigned_to === profile.id && !c.is_pending_approval && (c.frequency !== 'one-off' || !c.last_completed_at)).length}
                         </span>
                         <span className="stat-label">Your Active Chores</span>
                     </div>
@@ -197,8 +302,67 @@ export default function Dashboard({ profile, house, houseMembers, chores, setAct
             </div>
 
             <div className="dashboard-sections">
-                {/* Main section: Today and Overdue */}
+                {/* Main section: Today, Verifications and Overdue */}
                 <div className="dash-mainSpaced spaced-y-6" style={{ display: 'flex', flexDirection: 'column', gap: '24px', flexGrow: 1 }}>
+                    {/* Pending Approvals Section */}
+                    {verificationsRequired.length > 0 && (
+                        <div className="glass-card module-card" style={{ border: '1px solid rgba(168, 85, 247, 0.3)' }}>
+                            <div className="module-header" style={{ marginBottom: '12px' }}>
+                                <div className="module-title">
+                                    <Star size={20} style={{ color: '#ef4444' }} />
+                                    <h3 style={{ color: 'var(--accent-purple)' }}>Verifications Required</h3>
+                                </div>
+                            </div>
+                            <div className="list-container">
+                                {verificationsRequired.map(chore => {
+                                    const claimant = houseMembers.find(m => m.id === chore.pending_completed_by);
+                                    const activeRating = starRatings[chore.id] || 5;
+
+                                    return (
+                                        <div key={chore.id} className="list-item" style={{ flexDirection: 'column', alignItems: 'stretch', gap: '10px', borderLeft: '3px solid var(--accent-purple)' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                <div>
+                                                    <p className="list-item-title" style={{ fontSize: '0.95rem' }}>{chore.name}</p>
+                                                    <small className="text-secondary">
+                                                        Completed by: <strong>{claimant ? claimant.name : 'Roommate'}</strong>
+                                                    </small>
+                                                </div>
+                                                <div style={{ display: 'flex', gap: '6px' }}>
+                                                    <button onClick={() => handleApproveClaim(chore)} className="btn btn-primary btn-small">Approve</button>
+                                                    <button onClick={() => handleRejectClaim(chore)} className="btn btn-secondary btn-small" style={{ color: '#ef4444' }}>Reject</button>
+                                                </div>
+                                            </div>
+
+                                            {/* Star Rating Selector */}
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '8px' }}>
+                                                <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Rating: </span>
+                                                <div style={{ display: 'flex', gap: '4px' }}>
+                                                    {[1, 2, 3, 4, 5].map(star => {
+                                                        const isSelected = star <= activeRating;
+                                                        return (
+                                                            <button
+                                                                key={star}
+                                                                type="button"
+                                                                onClick={() => handleSelectStar(chore.id, star)}
+                                                                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                                                            >
+                                                                <Star
+                                                                    size={16}
+                                                                    fill={isSelected ? '#fbbf24' : 'none'}
+                                                                    color={isSelected ? '#fbbf24' : 'var(--text-muted)'}
+                                                                />
+                                                            </button>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
+
                     {/* Overdue Chores Card */}
                     {stats.overdue.length > 0 && (
                         <div className="glass-card module-card" style={{ border: '1px solid rgba(239, 68, 68, 0.2)' }}>
@@ -250,7 +414,7 @@ export default function Dashboard({ profile, house, houseMembers, chores, setAct
                                     return (
                                         <div key={chore.id} className="list-item">
                                             <div className="list-item-content">
-                                                <button onClick={() => handleQuickComplete(chore)} className="list-item-checkbox" title="Complete Chore" />
+                                                <button onClick={() => handleQuickComplete(chore)} className="list-item-checkbox" title="Claim Completion" />
                                                 <div>
                                                     <p className="list-item-title">{chore.name}</p>
                                                     <small className="text-muted">
@@ -275,26 +439,22 @@ export default function Dashboard({ profile, house, houseMembers, chores, setAct
                             </div>
                         </div>
                         <div className="list-container">
-                            {chores.filter(c => c.frequency !== 'one-off').length === 0 ? (
-                                <p className="helper-text font-italic">No rotating chores currently scheduled.</p>
-                            ) : (
-                                chores.filter(c => c.frequency !== 'one-off').map(chore => {
-                                    const assignee = houseMembers.find(m => m.id === chore.assigned_to);
-                                    return (
-                                        <div key={chore.id} className="list-item" style={{ padding: '12px 16px' }}>
-                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                                                <span style={{ fontSize: '0.90rem', fontWeight: 'bold' }}>{chore.name}</span>
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                                                    <span>Current: <strong>{assignee ? assignee.name : 'Anyone'}</strong></span>
-                                                    <ArrowRight size={10} />
-                                                    <span>Next up: <strong>{getNextInRotation(chore)}</strong></span>
-                                                </div>
+                            {chores.filter(c => c.frequency !== 'one-off').map(chore => {
+                                const assignee = houseMembers.find(m => m.id === chore.assigned_to);
+                                return (
+                                    <div key={chore.id} className="list-item" style={{ padding: '12px 16px' }}>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                            <span style={{ fontSize: '0.90rem', fontWeight: 'bold' }}>{chore.name}</span>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                                                <span>Current: <strong>{assignee ? assignee.name : 'Anyone'}</strong></span>
+                                                <ArrowRight size={10} />
+                                                <span>Next up: <strong>{getNextInRotation(chore)}</strong></span>
                                             </div>
-                                            <span className="badge badge-primary">{chore.frequency}</span>
                                         </div>
-                                    );
-                                })
-                            )}
+                                        <span className="badge badge-primary">{chore.frequency}</span>
+                                    </div>
+                                );
+                            })}
                         </div>
                     </div>
                 </div>

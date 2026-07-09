@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { supabase } from '../supabaseClient';
-import { CheckSquare, Plus, RotateCw, Calendar, User, Check, Trash2, ArrowRightLeft, FastForward, History } from 'lucide-react';
+import { CheckSquare, Plus, RotateCw, Calendar, User, Check, Trash2, ArrowRightLeft, FastForward, History, Star } from 'lucide-react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 export default function Chores({ profile, houseId, houseMembers, chores, choreHistory = [] }) {
@@ -10,6 +10,7 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
     const [selectedChoreToSwap, setSelectedChoreToSwap] = useState(null);
     const [swapAssignee, setSwapAssignee] = useState('');
     const [showHistoryDrawer, setShowHistoryDrawer] = useState(false);
+    const [starRatings, setStarRatings] = useState({}); // { choreId: rating }
 
     // Form State
     const [name, setName] = useState('');
@@ -17,13 +18,13 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
     const [assignedTo, setAssignedTo] = useState(profile.id);
     const [frequency, setFrequency] = useState('one-off');
     const [dueDate, setDueDate] = useState('');
-    const [rotationType, setRotationType] = useState('rotating'); // 'rotating' vs 'fixed'
-    const [rotationQueue, setRotationQueue] = useState(houseMembers.map(m => m.id)); // Order of rotation
+    const [rotationType, setRotationType] = useState('rotating');
+    const [rotationQueue, setRotationQueue] = useState(houseMembers.map(m => m.id));
 
     const [submitError, setSubmitError] = useState('');
     const [loading, setLoading] = useState(false);
 
-    // 1. Mutation for adding a chore
+    // 1. Mutation: Add new chore
     const appendChoreMutation = useMutation({
         mutationFn: async (newChore) => {
             const { data, error } = await supabase
@@ -46,12 +47,42 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
         }
     });
 
-    // 2. Mutation for completing a chore
-    const completeChoreMutation = useMutation({
-        mutationFn: async ({ choreId, currentAssigneeId, frequency, currentDueDate, name }) => {
+    // 2. Mutation: Claim completion (flag pending approval)
+    const claimChoreMutation = useMutation({
+        mutationFn: async (chore) => {
+            const { error } = await supabase
+                .from('chores')
+                .update({
+                    is_pending_approval: true,
+                    pending_completed_by: profile.id
+                })
+                .eq('id', chore.id);
+            if (error) throw error;
+
+            // Generate notification for other roommates
+            const otherMembers = houseMembers.filter(m => m.id !== profile.id);
+            for (const member of otherMembers) {
+                await supabase.from('chore_notifications').insert([{
+                    house_id: houseId,
+                    message: `${profile.name} completed "${chore.name}". Please approve/rate!`,
+                    profile_id: member.id
+                }]);
+            }
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries(['chores']);
+            queryClient.invalidateQueries(['chore_notifications']);
+        }
+    });
+
+    // 3. Mutation: Approve completion (final resolve, rotate & log)
+    const approveChoreMutation = useMutation({
+        mutationFn: async ({ choreId, currentAssigneeId, frequency, currentDueDate, name, rating, claimantId }) => {
             let updateFields = {
                 last_completed_at: new Date().toISOString(),
-                last_completed_by: profile.id
+                last_completed_by: claimantId,
+                is_pending_approval: false,
+                pending_completed_by: null
             };
 
             let nextAssigneeId = currentAssigneeId;
@@ -61,7 +92,7 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
                 const targetChore = chores.find(c => c.id === choreId);
                 const order = (targetChore?.rotation_order || []).filter(uid => houseMembers.some(m => m.id === uid));
                 const activeQueue = order.length > 0 ? order : houseMembers.map(m => m.id);
-                const currentIndex = activeQueue.indexOf(currentAssigneeId);
+                const currentIndex = activeQueue.indexOf(claimantId);
                 const nextIndex = currentIndex !== -1 ? (currentIndex + 1) % activeQueue.length : 0;
                 nextAssigneeId = activeQueue[nextIndex];
                 updateFields.assigned_to = nextAssigneeId;
@@ -79,26 +110,35 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
                 updateFields.due_date = nextDueDate.toISOString();
             }
 
-            const { error } = await supabase
+            const { error: choreErr } = await supabase
                 .from('chores')
                 .update(updateFields)
                 .eq('id', choreId);
-            if (error) throw error;
+            if (choreErr) throw choreErr;
 
-            // History log
+            // Log details history
             await supabase.from('chore_history').insert([{
                 house_id: houseId,
                 chore_id: choreId,
                 chore_name: name,
-                completed_by: profile.id,
-                action_type: 'complete'
+                completed_by: claimantId,
+                action_type: 'complete',
+                rating: rating,
+                approved_by: profile.id
             }]);
 
-            // Notification message
-            if (nextAssigneeId !== currentAssigneeId) {
+            // Notify claimant
+            await supabase.from('chore_notifications').insert([{
+                house_id: houseId,
+                message: `Your completion of "${name}" was approved with a ${rating}-star rating!`,
+                profile_id: claimantId
+            }]);
+
+            // Notify next assignee
+            if (nextAssigneeId !== claimantId) {
                 await supabase.from('chore_notifications').insert([{
                     house_id: houseId,
-                    message: `${profile.name} completed "${name}". Next turn is yours!`,
+                    message: `${name} has been rotated. Next turn is yours!`,
                     profile_id: nextAssigneeId
                 }]);
             }
@@ -110,7 +150,31 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
         }
     });
 
-    // 3. Mutation for skipping a turn
+    // 4. Mutation: Reject claim
+    const rejectChoreMutation = useMutation({
+        mutationFn: async ({ choreId, claimantId, name }) => {
+            const { error } = await supabase
+                .from('chores')
+                .update({
+                    is_pending_approval: false,
+                    pending_completed_by: null
+                })
+                .eq('id', choreId);
+            if (error) throw error;
+
+            await supabase.from('chore_notifications').insert([{
+                house_id: houseId,
+                message: `Your completion claim for "${name}" was rejected. Please review.`,
+                profile_id: claimantId
+            }]);
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries(['chores']);
+            queryClient.invalidateQueries(['chore_notifications']);
+        }
+    });
+
+    // 5. Mutation: Skip turn
     const skipTurnMutation = useMutation({
         mutationFn: async ({ choreId, currentAssigneeId, name }) => {
             let nextAssigneeId = currentAssigneeId;
@@ -130,7 +194,6 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
                 .eq('id', choreId);
             if (error) throw error;
 
-            // History log
             await supabase.from('chore_history').insert([{
                 house_id: houseId,
                 chore_id: choreId,
@@ -139,7 +202,6 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
                 action_type: 'skip'
             }]);
 
-            // Notification
             await supabase.from('chore_notifications').insert([{
                 house_id: houseId,
                 message: `${profile.name} skipped turn for "${name}". It has been passed to you!`,
@@ -153,7 +215,7 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
         }
     });
 
-    // 4. Mutation for swapping turns
+    // 6. Mutation: Swap turn
     const swapTurnMutation = useMutation({
         mutationFn: async ({ choreId, targetRoommateId, name }) => {
             const { error } = await supabase
@@ -162,7 +224,6 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
                 .eq('id', choreId);
             if (error) throw error;
 
-            // History log
             await supabase.from('chore_history').insert([{
                 house_id: houseId,
                 chore_id: choreId,
@@ -171,7 +232,6 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
                 action_type: 'swap'
             }]);
 
-            // Notification
             await supabase.from('chore_notifications').insert([{
                 house_id: houseId,
                 message: `${profile.name} swapped the turn for "${name}" with you.`,
@@ -188,7 +248,7 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
         }
     });
 
-    // 5. Mutation for deleting a chore
+    // 7. Mutation: Delete chore
     const deleteChoreMutation = useMutation({
         mutationFn: async (choreId) => {
             const { error } = await supabase.from('chores').delete().eq('id', choreId);
@@ -228,18 +288,47 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
         }
     };
 
-    const handleCompleteChore = async (chore) => {
-        try {
-            await completeChoreMutation.mutateAsync({
+    const handleCompletePress = async (chore) => {
+        if (houseMembers.length <= 1) {
+            // Self-approval
+            approveChoreMutation.mutate({
                 choreId: chore.id,
                 currentAssigneeId: chore.assigned_to,
                 frequency: chore.frequency,
                 currentDueDate: chore.due_date,
-                name: chore.name
+                name: chore.name,
+                rating: 5,
+                claimantId: profile.id
             });
-        } catch (err) {
-            alert('Failed to complete chore: ' + err.message);
+        } else {
+            claimChoreMutation.mutate(chore);
         }
+    };
+
+    const handleSelectStar = (choreId, val) => {
+        setStarRatings({ ...starRatings, [choreId]: val });
+    };
+
+    const handleApprovePress = (chore) => {
+        const rating = starRatings[chore.id] || 5;
+        approveChoreMutation.mutate({
+            choreId: chore.id,
+            currentAssigneeId: chore.assigned_to,
+            frequency: chore.frequency,
+            currentDueDate: chore.due_date,
+            name: chore.name,
+            rating: rating,
+            claimantId: chore.pending_completed_by
+        });
+    };
+
+    const handleRejectPress = (chore) => {
+        if (!confirm(`Are you sure you want to reject the completion claim for "${chore.name}"?`)) return;
+        rejectChoreMutation.mutate({
+            choreId: chore.id,
+            claimantId: chore.pending_completed_by,
+            name: chore.name
+        });
     };
 
     const handleSkipChore = async (chore) => {
@@ -296,7 +385,7 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
             <div className="section-header">
                 <div>
                     <h2>Roommate Chores List</h2>
-                    <p className="text-secondary">Keep your shared flat running smoothly. Manage schedules and assign turns.</p>
+                    <p className="text-secondary">Keep your shared flat running smoothly. Manage schedules and validation reviews.</p>
                 </div>
                 <div style={{ display: 'flex', gap: '10px' }}>
                     <button onClick={() => setShowHistoryDrawer(true)} className="btn btn-secondary">
@@ -320,71 +409,127 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
                             const assignee = houseMembers.find(m => m.id === chore.assigned_to);
                             const isOneOffCompleted = chore.frequency === 'one-off' && chore.last_completed_at;
 
+                            // Pending approval states
+                            const isClaimedByMe = chore.is_pending_approval && chore.pending_completed_by === profile.id;
+                            const isClaimedByOther = chore.is_pending_approval && chore.pending_completed_by !== profile.id;
+                            const claimant = houseMembers.find(m => m.id === chore.pending_completed_by);
+
                             return (
-                                <div key={chore.id} className="list-item" style={{ opacity: isOneOffCompleted ? 0.6 : 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                    <div className="list-item-content">
-                                        <button
-                                            onClick={() => !isOneOffCompleted && handleCompleteChore(chore)}
-                                            disabled={isOneOffCompleted}
-                                            className={`list-item-checkbox ${isOneOffCompleted ? 'checked' : ''}`}
-                                            title="Mark as Complete"
-                                        >
-                                            {isOneOffCompleted && <Check size={14} />}
-                                        </button>
-                                        <div>
-                                            <p className={`list-item-title ${isOneOffCompleted ? 'completed' : ''}`}>
-                                                {chore.name}
-                                            </p>
-                                            <small className="text-muted">
-                                                {chore.description && <span>{chore.description} • </span>}
-                                                <span>Assignee: <strong>{assignee ? assignee.name : 'Anyone'}</strong></span>
-                                                <span className="badge badge-secondary" style={{ marginLeft: '8px', fontSize: '0.65rem' }}>
-                                                    {chore.rotation_type === 'rotating'
-                                                        ? `${chore.frequency} rotation`
-                                                        : `fixed - ${chore.frequency}`
-                                                    }
+                                <div key={chore.id} className="list-item" style={{ opacity: isOneOffCompleted ? 0.6 : 1, flexDirection: 'column', alignItems: 'stretch', gap: '8px' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center w-full' }}>
+                                        <div className="list-item-content">
+                                            {/* Checkbox triggers verification claim or quick complete */}
+                                            <button
+                                                onClick={() => !isOneOffCompleted && !chore.is_pending_approval && handleCompletePress(chore)}
+                                                disabled={isOneOffCompleted || chore.is_pending_approval}
+                                                className={`list-item-checkbox ${isOneOffCompleted ? 'checked' : ''} ${chore.is_pending_approval ? 'disabled-checkbox' : ''}`}
+                                                title={chore.is_pending_approval ? "Pending Approval" : "Complete Chore"}
+                                                style={{ cursor: chore.is_pending_approval ? 'default' : 'pointer' }}
+                                            >
+                                                {isOneOffCompleted && <Check size={14} />}
+                                            </button>
+
+                                            <div>
+                                                <p className={`list-item-title ${isOneOffCompleted ? 'completed' : ''}`}>
+                                                    {chore.name}
+                                                </p>
+                                                <small className="text-secondary" style={{ display: 'block', display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center', marginTop: '4px' }}>
+                                                    {chore.description && <span>{chore.description} • </span>}
+                                                    <span>Assignee: <strong>{assignee ? assignee.name : 'Anyone'}</strong></span>
+                                                    <span className="badge badge-secondary" style={{ fontSize: '0.65rem' }}>
+                                                        {chore.rotation_type === 'rotating'
+                                                            ? `${chore.frequency} rotation`
+                                                            : `fixed - ${chore.frequency}`
+                                                        }
+                                                    </span>
+
+                                                    {/* Rating approval badges */}
+                                                    {isClaimedByMe && (
+                                                        <span className="badge" style={{ background: 'rgba(234, 179, 8, 0.15)', color: '#eab308' }}>
+                                                            ⌛ Pending Approval by Roommates
+                                                        </span>
+                                                    )}
+                                                    {isClaimedByOther && (
+                                                        <span className="badge" style={{ background: 'rgba(168, 85, 247, 0.15)', color: '#c084fc' }}>
+                                                            ⌛ Needs Verification (Completed by {claimant ? claimant.name : 'Roommate'})
+                                                        </span>
+                                                    )}
+                                                </small>
+                                            </div>
+                                        </div>
+
+                                        {/* Action buttons (Skips / Swaps / Deletes) */}
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                            {chore.due_date && !isOneOffCompleted && (
+                                                <span className="badge badge-primary">
+                                                    Due: {new Date(chore.due_date).toLocaleDateString()}
                                                 </span>
-                                            </small>
+                                            )}
+
+                                            {!isOneOffCompleted && !chore.is_pending_approval && chore.rotation_type === 'rotating' && houseMembers.length > 1 && (
+                                                <>
+                                                    <button
+                                                        onClick={() => handleSkipChore(chore)}
+                                                        className="btn btn-secondary btn-small"
+                                                        title="Skip turn (Pass to next)"
+                                                        style={{ padding: '6px' }}
+                                                    >
+                                                        <FastForward size={14} />
+                                                    </button>
+                                                    <button
+                                                        onClick={() => handleSwapOpen(chore)}
+                                                        className="btn btn-secondary btn-small"
+                                                        title="Swap turn with another roommate"
+                                                        style={{ padding: '6px' }}
+                                                    >
+                                                        <ArrowRightLeft size={14} />
+                                                    </button>
+                                                </>
+                                            )}
+
+                                            <button
+                                                onClick={() => handleDeleteChore(chore.id)}
+                                                style={{ background: 'none', border: 'none', color: '#ef4444', padding: '6px', cursor: 'pointer' }}
+                                                title="Delete Chore"
+                                            >
+                                                <Trash2 size={16} />
+                                            </button>
                                         </div>
                                     </div>
 
-                                    {/* Action Buttons for Skips, Swaps, Delete */}
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                        {chore.due_date && !isOneOffCompleted && (
-                                            <span className="badge badge-primary">
-                                                Due: {new Date(chore.due_date).toLocaleDateString()}
-                                            </span>
-                                        )}
+                                    {/* Star Rating Review block inside list for other roommates */}
+                                    {isClaimedByOther && (
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center', padding: '8px 12px', background: 'rgba(255, 255, 255, 0.02)', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.05)', marginLeft: '32px' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                                <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Rating: </span>
+                                                <div style={{ display: 'flex', gap: '2px' }}>
+                                                    {[1, 2, 3, 4, 5].map(star => {
+                                                        const activeRating = starRatings[chore.id] || 5;
+                                                        const isSelected = star <= activeRating;
+                                                        return (
+                                                            <button
+                                                                key={star}
+                                                                type="button"
+                                                                onClick={() => handleSelectStar(chore.id, star)}
+                                                                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                                                            >
+                                                                <Star
+                                                                    size={14}
+                                                                    fill={isSelected ? '#fbbf24' : 'none'}
+                                                                    color={isSelected ? '#fbbf24' : 'var(--text-muted)'}
+                                                                />
+                                                            </button>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
 
-                                        {!isOneOffCompleted && chore.rotation_type === 'rotating' && houseMembers.length > 1 && (
-                                            <>
-                                                <button
-                                                    onClick={() => handleSkipChore(chore)}
-                                                    className="btn btn-secondary btn-small"
-                                                    title="Skip your turn (Pass to next)"
-                                                    style={{ padding: '6px' }}
-                                                >
-                                                    <FastForward size={14} />
-                                                </button>
-                                                <button
-                                                    onClick={() => handleSwapOpen(chore)}
-                                                    className="btn btn-secondary btn-small"
-                                                    title="Swap turn with another roommate"
-                                                    style={{ padding: '6px' }}
-                                                >
-                                                    <ArrowRightLeft size={14} />
-                                                </button>
-                                            </>
-                                        )}
-
-                                        <button
-                                            onClick={() => handleDeleteChore(chore.id)}
-                                            style={{ background: 'none', border: 'none', color: '#ef4444', padding: '6px', cursor: 'pointer' }}
-                                            title="Delete Chore"
-                                        >
-                                            <Trash2 size={16} />
-                                        </button>
-                                    </div>
+                                            <div style={{ display: 'flex', gap: '6px', marginLeft: 'auto' }}>
+                                                <button onClick={() => handleApprovePress(chore)} className="btn btn-primary btn-small" style={{ padding: '4px 8px', fontSize: '0.75rem' }}>Approve</button>
+                                                <button onClick={() => handleRejectPress(chore)} className="btn btn-secondary btn-small" style={{ padding: '4px 8px', fontSize: '0.75rem', color: '#ef4444' }}>Reject</button>
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                             );
                         })}
@@ -444,6 +589,7 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
                             ) : (
                                 choreHistory.map((item, idx) => {
                                     const user = houseMembers.find(m => m.id === item.completed_by);
+                                    const approver = houseMembers.find(m => m.id === item.approved_by);
                                     let typeBadg = 'complete';
                                     let badgeColor = 'rgba(34, 197, 94, 0.1)';
                                     let textCol = '#22c55e';
@@ -466,11 +612,27 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
                                                     {typeBadg}
                                                 </span>
                                             </div>
-                                            <div style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
-                                                Action by: {user ? user.name : 'Unknown'}
+                                            <div style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                                                <span>Worker: <strong>{user ? user.name : 'Unknown'}</strong></span>
+                                                {item.rating && (
+                                                    <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                                        Stars:
+                                                        <div style={{ display: 'flex', gap: '1px' }}>
+                                                            {[1, 2, 3, 4, 5].map(st => (
+                                                                <Star
+                                                                    key={st}
+                                                                    size={10}
+                                                                    fill={st <= item.rating ? '#fbbf24' : 'none'}
+                                                                    color={st <= item.rating ? '#fbbf24' : 'var(--text-muted)'}
+                                                                />
+                                                            ))}
+                                                        </div>
+                                                        {approver && <span style={{ color: 'var(--text-muted)' }}> (approved by {approver.name})</span>}
+                                                    </span>
+                                                )}
                                             </div>
-                                            <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginTop: '2px' }}>
-                                                {new Date(item.completed_at).toLocaleString()}
+                                            <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginTop: '4px' }}>
+                                                {new Date(item.created_at).toLocaleString()}
                                             </div>
                                         </div>
                                     );

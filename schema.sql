@@ -149,3 +149,15 @@ CREATE POLICY "Allow all authenticated users access to chore_history"
 
 CREATE POLICY "Allow all authenticated users access to chore_notifications"
     ON public.chore_notifications FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- ==========================================================================
+-- Chore 5-Star Approval Validation
+-- ==========================================================================
+
+-- 1. Alter chores table to track pending claims
+ALTER TABLE public.chores ADD COLUMN IF NOT EXISTS is_pending_approval boolean DEFAULT false NOT NULL;
+ALTER TABLE public.chores ADD COLUMN IF NOT EXISTS pending_completed_by uuid REFERENCES public.profiles(id);
+
+-- 2. Alter history table to track ratings and validation details
+ALTER TABLE public.chore_history ADD COLUMN IF NOT EXISTS rating integer CHECK (rating >= 1 AND rating <= 5);
+ALTER TABLE public.chore_history ADD COLUMN IF NOT EXISTS approved_by uuid REFERENCES public.profiles(id);
