@@ -3,9 +3,10 @@ import { Home, Calendar, CheckSquare, Clock, AlertTriangle, CheckCircle, ArrowRi
 import { supabase } from '../supabaseClient';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
-export default function Dashboard({ profile, house, houseMembers, chores, setActiveTab }) {
+export default function Dashboard({ profile, house, houseMembers, chores, setActiveTab, setChoreSubTab }) {
     const queryClient = useQueryClient();
     const [starRatings, setStarRatings] = useState({}); // { choreId: rating }
+    const [todayFilterUser, setTodayFilterUser] = useState('all');
 
     // Group and filter chores by deadline
     const stats = useMemo(() => {
@@ -54,9 +55,7 @@ export default function Dashboard({ profile, house, houseMembers, chores, setAct
                     overdue.push(chore);
                 }
             } else if (dueDateStr === todayStr) {
-                if (chore.assigned_to === profile.id || !chore.assigned_to) {
-                    today.push(chore);
-                }
+                today.push(chore);
             } else {
                 if (chore.assigned_to === profile.id || !chore.assigned_to) {
                     upcoming.push(chore);
@@ -66,6 +65,14 @@ export default function Dashboard({ profile, house, houseMembers, chores, setAct
 
         return { today, upcoming, overdue, completedToday, pendingApproval };
     }, [chores, profile.id]);
+
+    const displayedTodayChores = useMemo(() => {
+        return stats.today.filter(chore => {
+            if (todayFilterUser === 'all') return true;
+            if (todayFilterUser === 'me') return chore.assigned_to === profile.id || !chore.assigned_to;
+            return chore.assigned_to === todayFilterUser;
+        });
+    }, [stats.today, todayFilterUser, profile.id]);
 
     // Mutation to Claim Completion (marks chore as pending approval)
     const claimChoreMutation = useMutation({
@@ -278,7 +285,7 @@ export default function Dashboard({ profile, house, houseMembers, chores, setAct
 
             {/* Stats Cards */}
             <div className="stats-grid">
-                <div className="stat-card glass-card clickable-card" onClick={() => setActiveTab('chores')}>
+                <div className="stat-card glass-card clickable-card" onClick={() => { setActiveTab('chores'); setChoreSubTab('overdue'); }}>
                     <div className="stat-icon warning-bg">
                         <AlertTriangle size={24} />
                     </div>
@@ -288,7 +295,7 @@ export default function Dashboard({ profile, house, houseMembers, chores, setAct
                     </div>
                 </div>
 
-                <div className="stat-card glass-card clickable-card" onClick={() => setActiveTab('chores')}>
+                <div className="stat-card glass-card clickable-card" onClick={() => { setActiveTab('chores'); setChoreSubTab('today'); }}>
                     <div className="stat-icon purple-bg">
                         <Clock size={24} />
                     </div>
@@ -298,7 +305,7 @@ export default function Dashboard({ profile, house, houseMembers, chores, setAct
                     </div>
                 </div>
 
-                <div className="stat-card glass-card clickable-card" onClick={() => setActiveTab('chores')}>
+                <div className="stat-card glass-card clickable-card" onClick={() => { setActiveTab('chores'); setChoreSubTab('completed'); }}>
                     <div className="stat-icon success-bg">
                         <CheckCircle size={24} />
                     </div>
@@ -308,7 +315,7 @@ export default function Dashboard({ profile, house, houseMembers, chores, setAct
                     </div>
                 </div>
 
-                <div className="stat-card glass-card clickable-card" onClick={() => setActiveTab('chores')}>
+                <div className="stat-card glass-card clickable-card" onClick={() => { setActiveTab('chores'); setChoreSubTab('yours'); }}>
                     <div className="stat-icon cyan-bg">
                         <CheckSquare size={24} />
                     </div>
@@ -416,20 +423,45 @@ export default function Dashboard({ profile, house, houseMembers, chores, setAct
 
                     {/* Today's Chores */}
                     <div className="glass-card module-card">
-                        <div className="module-header">
+                        <div className="module-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
                             <div className="module-title">
                                 <Clock size={20} className="text-purple" />
                                 <h3>Today's Tasks</h3>
                             </div>
-                            <button onClick={() => setActiveTab('chores')} className="btn btn-secondary btn-small">
-                                View All
-                            </button>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <select
+                                    value={todayFilterUser}
+                                    onChange={(e) => setTodayFilterUser(e.target.value)}
+                                    className="input-field"
+                                    style={{
+                                        padding: '4px 24px 4px 8px',
+                                        fontSize: '0.75rem',
+                                        width: 'auto',
+                                        height: '28px',
+                                        margin: 0,
+                                        backgroundColor: 'var(--bg-tertiary)',
+                                        border: '1px solid var(--border-color)',
+                                        borderRadius: 'var(--radius-sm)',
+                                        color: 'var(--text-primary)',
+                                        cursor: 'pointer'
+                                    }}
+                                >
+                                    <option value="all">All Roommates</option>
+                                    <option value="me">Assigned to Me</option>
+                                    {houseMembers.filter(m => m.id !== profile.id).map(member => (
+                                        <option key={member.id} value={member.id}>{member.name}</option>
+                                    ))}
+                                </select>
+                                <button onClick={() => { setActiveTab('chores'); setChoreSubTab('today'); }} className="btn btn-secondary btn-small">
+                                    View All
+                                </button>
+                            </div>
                         </div>
                         <div className="list-container">
-                            {stats.today.length === 0 ? (
+                            {displayedTodayChores.length === 0 ? (
                                 <p className="helper-text font-italic">No chores due today. Clean house, clean mind!</p>
                             ) : (
-                                stats.today.map(chore => {
+                                displayedTodayChores.map(chore => {
                                     const assignee = houseMembers.find(m => m.id === chore.assigned_to);
                                     return (
                                         <div key={chore.id} className="list-item">

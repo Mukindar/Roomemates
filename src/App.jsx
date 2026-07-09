@@ -21,6 +21,7 @@ const queryClient = new QueryClient({
 function MainAppShell() {
   const [user, setUser] = useState(null);
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [choreSubTab, setChoreSubTab] = useState('all');
   const [authLoading, setAuthLoading] = useState(true);
   const qc = useQueryClient();
 
@@ -193,6 +194,20 @@ function MainAppShell() {
     refetchProfile();
   };
 
+  const handleSwitchHouse = async () => {
+    if (!window.confirm('Are you sure you want to switch or leave this household?')) return;
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .update({ house_id: null })
+        .eq('id', user.id);
+      if (error) throw error;
+      refetchProfile();
+    } catch (err) {
+      alert('Failed to switch household: ' + err.message);
+    }
+  };
+
   const handleMarkNotificationRead = async (notificationId) => {
     if (!supabase) return;
     await supabase
@@ -227,7 +242,8 @@ function MainAppShell() {
         const order = (chore.rotation_order || []).filter(uid => houseMembers.some(m => m.id === uid));
         const activeQueue = order.length > 0 ? order : houseMembers.map(m => m.id);
         const currentIndex = activeQueue.indexOf(chore.assigned_to);
-        const nextIndex = currentIndex !== -1 ? (currentIndex + 1) % activeQueue.length : 0;
+        const count = chore.rotation_count || 1;
+        const nextIndex = currentIndex !== -1 ? (currentIndex + count) % activeQueue.length : 0;
         nextAssigneeId = activeQueue[nextIndex];
 
         // Shift due date by 7 days
@@ -302,7 +318,8 @@ function MainAppShell() {
           const order = (chore.rotation_order || []).filter(uid => houseMembers.some(m => m.id === uid));
           const activeQueue = order.length > 0 ? order : houseMembers.map(m => m.id);
           const currentIndex = activeQueue.indexOf(claimantId);
-          const nextIndex = currentIndex !== -1 ? (currentIndex + 1) % activeQueue.length : 0;
+          const count = chore.rotation_count || 1;
+          const nextIndex = currentIndex !== -1 ? (currentIndex + count) % activeQueue.length : 0;
           nextAssigneeId = activeQueue[nextIndex];
           updateFields.assigned_to = nextAssigneeId;
         }
@@ -416,6 +433,7 @@ function MainAppShell() {
       profile={profile}
       house={house}
       onSignOut={handleSignOut}
+      onSwitchHouse={handleSwitchHouse}
       activeTab={activeTab}
       setActiveTab={setActiveTab}
       notifications={notifications}
@@ -428,6 +446,7 @@ function MainAppShell() {
           houseMembers={houseMembers}
           chores={chores}
           setActiveTab={setActiveTab}
+          setChoreSubTab={setChoreSubTab}
         />
       )}
 
@@ -438,6 +457,8 @@ function MainAppShell() {
           houseMembers={houseMembers}
           chores={chores}
           choreHistory={choreHistory}
+          choreSubTab={choreSubTab}
+          setChoreSubTab={setChoreSubTab}
         />
       )}
 

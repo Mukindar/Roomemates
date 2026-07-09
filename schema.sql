@@ -164,3 +164,7 @@ ALTER TABLE public.chore_history ADD COLUMN IF NOT EXISTS approved_by uuid REFER
 
 -- 3. Alter chores table to track claim timestamp
 ALTER TABLE public.chores ADD COLUMN IF NOT EXISTS approval_claimed_at timestamp with time zone;
+
+-- 4. Alter chores table to track concurrent assignees rotation count
+ALTER TABLE public.chores ADD COLUMN IF NOT EXISTS rotation_count integer DEFAULT 1 NOT NULL;
+

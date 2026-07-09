@@ -1,9 +1,17 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { supabase } from '../supabaseClient';
 import { CheckSquare, Plus, RotateCw, Calendar, User, Check, Trash2, ArrowRightLeft, FastForward, History, Star } from 'lucide-react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
-export default function Chores({ profile, houseId, houseMembers, chores, choreHistory = [] }) {
+export default function Chores({
+    profile,
+    houseId,
+    houseMembers,
+    chores,
+    choreHistory = [],
+    choreSubTab = 'all',
+    setChoreSubTab
+}) {
     const queryClient = useQueryClient();
     const [showAddModal, setShowAddModal] = useState(false);
     const [showSwapModal, setShowSwapModal] = useState(false);
@@ -16,7 +24,74 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
     const [selectedChoreToSkip, setSelectedChoreToSkip] = useState(null);
     const [skipAssignee, setSkipAssignee] = useState('');
 
-    // Form State
+    const getActiveAssignees = (chore) => {
+        if (chore.rotation_type === 'fixed') {
+            if (Array.isArray(chore.rotation_order) && chore.rotation_order.length > 0) {
+                return chore.rotation_order.filter(id => houseMembers.some(m => m.id === id));
+            }
+            return chore.assigned_to ? [chore.assigned_to] : [];
+        }
+        // Rotating chore
+        const order = (chore.rotation_order || []).filter(uid => houseMembers.some(m => m.id === uid));
+        const queue = order.length > 0 ? order : houseMembers.map(m => m.id);
+        if (queue.length === 0) return [];
+
+        const primaryId = chore.assigned_to || (queue.length > 0 ? queue[0] : null);
+        const currentIndex = queue.indexOf(primaryId);
+        if (currentIndex === -1) {
+            return primaryId ? [primaryId] : [];
+        }
+        const count = chore.rotation_count || 1;
+        const activeIds = [];
+        for (let i = 0; i < count; i++) {
+            const idx = (currentIndex + i) % queue.length;
+            if (!activeIds.includes(queue[idx])) {
+                activeIds.push(queue[idx]);
+            }
+        }
+        return activeIds;
+    };
+
+    const filteredChores = useMemo(() => {
+        const todayStr = new Date().toISOString().split('T')[0];
+        return chores.filter(chore => {
+            const isOneOffCompleted = chore.frequency === 'one-off' && chore.last_completed_at;
+
+            if (choreSubTab === 'all') {
+                return true;
+            }
+
+            if (choreSubTab === 'yours') {
+                const activeIds = getActiveAssignees(chore);
+                const isAssignedToUser = activeIds.includes(profile.id);
+                return isAssignedToUser && !isOneOffCompleted;
+            }
+
+            if (choreSubTab === 'today') {
+                if (!chore.due_date) return false;
+                const dueDateStr = new Date(chore.due_date).toISOString().split('T')[0];
+                return dueDateStr === todayStr && !isOneOffCompleted;
+            }
+
+            if (choreSubTab === 'overdue') {
+                if (!chore.due_date) return false;
+                const dueDateStr = new Date(chore.due_date).toISOString().split('T')[0];
+                return dueDateStr < todayStr && !isOneOffCompleted && !chore.is_pending_approval;
+            }
+
+            return true;
+        });
+    }, [chores, choreSubTab, profile.id, houseMembers]);
+
+    const completedTodayHistory = useMemo(() => {
+        const todayStr = new Date().toISOString().split('T')[0];
+        return (choreHistory || []).filter(item => {
+            if (!item.completed_at) return false;
+            const completedDateStr = new Date(item.completed_at).toISOString().split('T')[0];
+            return completedDateStr === todayStr;
+        });
+    }, [choreHistory]);
+
     const [name, setName] = useState('');
     const [desc, setDesc] = useState('');
     const [assignedTo, setAssignedTo] = useState(profile.id);
@@ -24,9 +99,11 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
     const [dueDate, setDueDate] = useState('');
     const [rotationType, setRotationType] = useState('rotating');
     const [rotationQueue, setRotationQueue] = useState(houseMembers.map(m => m.id));
+    const [rotationCount, setRotationCount] = useState(1);
 
     const [submitError, setSubmitError] = useState('');
     const [loading, setLoading] = useState(false);
+
 
     // 1. Mutation: Add new chore
     const appendChoreMutation = useMutation({
@@ -48,6 +125,7 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
             setDueDate('');
             setRotationType('rotating');
             setRotationQueue(houseMembers.map(m => m.id));
+            setRotationCount(1);
         },
         onError: (error) => {
             alert(`Database request failed: ${error.message}`);
@@ -104,8 +182,10 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
                 const targetChore = chores.find(c => c.id === choreId);
                 const order = (targetChore?.rotation_order || []).filter(uid => houseMembers.some(m => m.id === uid));
                 const activeQueue = order.length > 0 ? order : houseMembers.map(m => m.id);
-                const currentIndex = activeQueue.indexOf(claimantId);
-                const nextIndex = currentIndex !== -1 ? (currentIndex + 1) % activeQueue.length : 0;
+                const count = targetChore?.rotation_count || 1;
+                const primaryAssigneeId = targetChore?.assigned_to || claimantId;
+                const currentIndex = activeQueue.indexOf(primaryAssigneeId);
+                const nextIndex = currentIndex !== -1 ? (currentIndex + count) % activeQueue.length : 0;
                 nextAssigneeId = activeQueue[nextIndex];
                 updateFields.assigned_to = nextAssigneeId;
             }
@@ -288,19 +368,38 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
             return;
         }
 
+        if (rotationType === 'rotating' && rotationQueue.length === 0) {
+            setSubmitError('Please select at least one roommate for the rotation queue.');
+            return;
+        }
+
         setLoading(true);
+
+        const finalAssignedTo = rotationType === 'fixed'
+            ? (rotationQueue.length > 0 ? rotationQueue[0] : (assignedTo || null))
+            : (assignedTo || (rotationQueue.length > 0 ? rotationQueue[0] : null));
 
         try {
             await appendChoreMutation.mutateAsync({
                 house_id: houseId,
                 name,
                 description: desc,
-                assigned_to: assignedTo || null,
+                assigned_to: finalAssignedTo,
                 frequency,
                 due_date: dueDate ? new Date(dueDate).toISOString() : null,
                 rotation_type: rotationType,
-                rotation_order: rotationType === 'rotating' ? rotationQueue : []
+                rotation_order: rotationQueue,
+                rotation_count: rotationType === 'rotating' ? parseInt(rotationCount) : 1
             });
+            setShowAddModal(false);
+            setName('');
+            setDesc('');
+            setAssignedTo('');
+            setRotationType('rotating');
+            setRotationQueue(houseMembers.map(m => m.id));
+            setRotationCount(1);
+            setFrequency('one-off');
+            setDueDate('');
         } catch (err) {
             setSubmitError(err.message || 'Error occurred while saving chore.');
         } finally {
@@ -423,15 +522,77 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
                 </div>
             </div>
 
+            {/* Sub Tabs Panel */}
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', overflowX: 'auto', paddingBottom: '4px' }}>
+                {[
+                    { id: 'all', label: 'All Rotations' },
+                    { id: 'yours', label: 'Your Active Chores' },
+                    { id: 'today', label: 'Due Today' },
+                    { id: 'overdue', label: 'Overdue' },
+                    { id: 'completed', label: 'Completed Today' }
+                ].map(tab => (
+                    <button
+                        key={tab.id}
+                        onClick={() => setChoreSubTab(tab.id)}
+                        className={`btn ${choreSubTab === tab.id ? 'btn-primary' : 'btn-secondary'}`}
+                        style={{ padding: '8px 14px', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
+                    >
+                        {tab.label}
+                    </button>
+                ))}
+            </div>
+
             {/* List Chores */}
             <div className="glass-card">
-                <h3 style={{ marginBottom: '16px' }}>Current Scheduling</h3>
+                <h3 style={{ marginBottom: '16px' }}>
+                    {choreSubTab === 'all' && 'All Daily/Weekly Rotations'}
+                    {choreSubTab === 'yours' && 'Your Active Chores'}
+                    {choreSubTab === 'today' && "Chores Due Today"}
+                    {choreSubTab === 'overdue' && 'Overdue Household Chores'}
+                    {choreSubTab === 'completed' && 'Chores Completed/Rateable Today'}
+                </h3>
 
-                {chores.length === 0 ? (
-                    <p className="helper-text font-italic">No chores scheduled yet. Add one above!</p>
+                {choreSubTab === 'completed' ? (
+                    completedTodayHistory.length === 0 ? (
+                        <p className="helper-text font-italic">No chores completed today yet.</p>
+                    ) : (
+                        <div className="list-container">
+                            {completedTodayHistory.map((item, idx) => {
+                                const worker = houseMembers.find(m => m.id === item.completed_by);
+                                const approver = houseMembers.find(m => m.id === item.approved_by);
+                                return (
+                                    <div key={idx} className="list-item" style={{ flexDirection: 'column', alignItems: 'stretch', gap: '6px' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                            <div>
+                                                <p className="list-item-title" style={{ color: 'var(--success)' }}>✔ {item.chore_name}</p>
+                                                <small className="text-secondary" style={{ display: 'block', marginTop: '4px' }}>
+                                                    Completed by: <strong>{worker ? worker.name : 'Unknown'}</strong>
+                                                    {approver && <span> • Approved by: <strong>{approver.name}</strong></span>}
+                                                </small>
+                                            </div>
+                                            {item.rating && (
+                                                <div style={{ display: 'flex', gap: '2px' }}>
+                                                    {[1, 2, 3, 4, 5].map(star => (
+                                                        <Star
+                                                            key={star}
+                                                            size={14}
+                                                            fill={star <= item.rating ? '#fbbf24' : 'none'}
+                                                            color={star <= item.rating ? '#fbbf24' : 'var(--text-muted)'}
+                                                        />
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )
+                ) : filteredChores.length === 0 ? (
+                    <p className="helper-text font-italic">No chores found in this category.</p>
                 ) : (
                     <div className="list-container">
-                        {chores.map(chore => {
+                        {filteredChores.map(chore => {
                             const assignee = houseMembers.find(m => m.id === chore.assigned_to);
                             const isOneOffCompleted = chore.frequency === 'one-off' && chore.last_completed_at;
 
@@ -461,7 +622,48 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
                                                 </p>
                                                 <small className="text-secondary" style={{ display: 'block', display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center', marginTop: '4px' }}>
                                                     {chore.description && <span>{chore.description} • </span>}
-                                                    <span>Assignee: <strong>{assignee ? assignee.name : 'Anyone'}</strong></span>
+                                                    {chore.rotation_type === 'rotating' ? (
+                                                        <>
+                                                            <span>Assignees: <strong>{(() => {
+                                                                const activeIds = getActiveAssignees(chore);
+                                                                return activeIds.map(uid => houseMembers.find(m => m.id === uid)?.name).filter(Boolean).join(', ');
+                                                            })()}</strong></span>
+                                                            {(() => {
+                                                                const order = (chore.rotation_order || []).filter(uid => houseMembers.some(m => m.id === uid));
+                                                                const queue = order.length > 0 ? order : houseMembers.map(m => m.id);
+                                                                const primaryId = chore.assigned_to || (queue.length > 0 ? queue[0] : null);
+                                                                const currentIndex = queue.indexOf(primaryId);
+                                                                const count = chore.rotation_count || 1;
+                                                                if (currentIndex !== -1 && queue.length > count) {
+                                                                    const nextIndex = (currentIndex + count) % queue.length;
+                                                                    const nextIds = [];
+                                                                    for (let i = 0; i < count; i++) {
+                                                                        const idx = (nextIndex + i) % queue.length;
+                                                                        if (!nextIds.includes(queue[idx])) {
+                                                                            nextIds.push(queue[idx]);
+                                                                        }
+                                                                    }
+                                                                    const nextNames = nextIds.map(uid => houseMembers.find(m => m.id === uid)?.name).filter(Boolean).join(', ');
+                                                                    return (
+                                                                        <span>➔ Next: <strong>{nextNames}</strong></span>
+                                                                    );
+                                                                }
+                                                                return null;
+                                                            })()}
+                                                        </>
+                                                    ) : (
+                                                        <span>
+                                                            Assignees: <strong>{(() => {
+                                                                if (Array.isArray(chore.rotation_order) && chore.rotation_order.length > 0) {
+                                                                    return chore.rotation_order
+                                                                        .map(uid => houseMembers.find(m => m.id === uid)?.name)
+                                                                        .filter(Boolean)
+                                                                        .join(', ');
+                                                                }
+                                                                return assignee ? assignee.name : 'Anyone';
+                                                            })()}</strong>
+                                                        </span>
+                                                    )}
                                                     <span className="badge badge-secondary" style={{ fontSize: '0.65rem' }}>
                                                         {chore.rotation_type === 'rotating'
                                                             ? `${chore.frequency} rotation`
@@ -765,44 +967,173 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
                                 </div>
                             </div>
 
-                            <div className="form-group">
-                                <label className="form-label" htmlFor="chore-assignee">
-                                    {rotationType === 'rotating' ? 'Initial Assignee' : 'Assigned Roommate'}
-                                </label>
-                                <select
-                                    id="chore-assignee"
-                                    className="input-field"
-                                    value={assignedTo}
-                                    onChange={(e) => setAssignedTo(e.target.value)}
-                                >
-                                    <option value="">Unassigned (Anyone)</option>
-                                    {houseMembers.map(member => (
-                                        <option key={member.id} value={member.id}>
-                                            {member.name} {member.id === profile.id ? '(You)' : ''}
-                                        </option>
-                                    ))}
-                                </select>
-                            </div>
+                            {rotationType === 'fixed' ? (
+                                houseMembers.length > 1 ? (
+                                    <div className="form-group">
+                                        <label className="form-label">Assign to Roommates (Check to assign; select one or more)</label>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', padding: '10px', background: 'rgba(255,255,255,0.02)', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                                            {houseMembers.map(member => {
+                                                const included = rotationQueue.includes(member.id);
+                                                return (
+                                                    <label key={member.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={included}
+                                                            onChange={() => handleToggleQueueMember(member.id)}
+                                                        />
+                                                        <span style={{ fontSize: '0.85rem' }}>{member.name}</span>
+                                                    </label>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="form-group">
+                                        <label className="form-label" htmlFor="chore-assignee">Assigned Roommate</label>
+                                        <select
+                                            id="chore-assignee"
+                                            className="input-field"
+                                            value={assignedTo}
+                                            onChange={(e) => setAssignedTo(e.target.value)}
+                                        >
+                                            <option value="">Unassigned (Anyone)</option>
+                                            {houseMembers.map(member => (
+                                                <option key={member.id} value={member.id}>
+                                                    {member.name} {member.id === profile.id ? '(You)' : ''}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                )
+                            ) : (
+                                <div className="form-group">
+                                    <label className="form-label" htmlFor="chore-assignee">Initial Assignee</label>
+                                    <select
+                                        id="chore-assignee"
+                                        className="input-field"
+                                        value={assignedTo}
+                                        onChange={(e) => setAssignedTo(e.target.value)}
+                                    >
+                                        <option value="">Unassigned (Anyone)</option>
+                                        {houseMembers.map(member => (
+                                            <option key={member.id} value={member.id}>
+                                                {member.name} {member.id === profile.id ? '(You)' : ''}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                            )}
 
                             {rotationType === 'rotating' && houseMembers.length > 1 && (
-                                <div className="form-group">
-                                    <label className="form-label">Rotation Order (Check to include in queue)</label>
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', padding: '10px', background: 'rgba(255,255,255,0.02)', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.05)' }}>
-                                        {houseMembers.map(member => {
-                                            const included = rotationQueue.includes(member.id);
-                                            return (
-                                                <label key={member.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-                                                    <input
-                                                        type="checkbox"
-                                                        checked={included}
-                                                        onChange={() => handleToggleQueueMember(member.id)}
-                                                    />
-                                                    <span style={{ fontSize: '0.85rem' }}>{member.name}</span>
-                                                </label>
-                                            );
-                                        })}
+                                <>
+                                    <div className="form-group">
+                                        <label className="form-label" htmlFor="chore-rotation-count">Concurrent Assignees (1 to 5)</label>
+                                        <select
+                                            id="chore-rotation-count"
+                                            className="input-field"
+                                            value={rotationCount}
+                                            onChange={(e) => setRotationCount(parseInt(e.target.value))}
+                                        >
+                                            {[1, 2, 3, 4, 5].map(val => (
+                                                <option key={val} value={val}>{val}</option>
+                                            ))}
+                                        </select>
                                     </div>
-                                </div>
+                                    <div className="form-group">
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                                            <label className="form-label" style={{ marginBottom: 0 }}>Rotation Order (Determines run sequence)</label>
+                                            {rotationQueue.length > 0 && (
+                                                <button
+                                                    type="button"
+                                                    className="btn btn-secondary btn-small"
+                                                    onClick={() => setRotationQueue([])}
+                                                    style={{ padding: '2px 8px', fontSize: '0.75rem', background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.2)', height: 'auto', minHeight: 'unset' }}
+                                                >
+                                                    Reset Order
+                                                </button>
+                                            )}
+                                        </div>
+
+                                        {/* Current Queue Sequence Display */}
+                                        <div style={{ padding: '12px', background: 'rgba(255,255,255,0.01)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)', marginBottom: '10px' }}>
+                                            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '8px' }}>
+                                                Active Rotation Sequence:
+                                            </span>
+                                            {rotationQueue.length === 0 ? (
+                                                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontStyle: 'italic', margin: 0 }}>
+                                                    Queue is empty. Select roommates below to build run order.
+                                                </p>
+                                            ) : (
+                                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                                                    {rotationQueue.map((memberId, index) => {
+                                                        const member = houseMembers.find(m => m.id === memberId);
+                                                        if (!member) return null;
+                                                        return (
+                                                            <div
+                                                                key={memberId}
+                                                                style={{
+                                                                    display: 'flex',
+                                                                    alignItems: 'center',
+                                                                    gap: '6px',
+                                                                    padding: '4px 10px',
+                                                                    background: 'rgba(168, 85, 247, 0.15)',
+                                                                    border: '1px solid rgba(168, 85, 247, 0.3)',
+                                                                    borderRadius: '20px',
+                                                                    fontSize: '0.8rem'
+                                                                }}
+                                                            >
+                                                                <span style={{ fontWeight: 'bold', color: '#c084fc' }}>{index + 1}.</span>
+                                                                <span>{member.name}</span>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => setRotationQueue(rotationQueue.filter(id => id !== memberId))}
+                                                                    style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '0 2px', fontSize: '0.9rem', lineHeight: 1 }}
+                                                                >
+                                                                    ✕
+                                                                </button>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        {/* Available Roommates to Append */}
+                                        <div style={{ padding: '10px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                                            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '8px' }}>
+                                                Select Roommates to Add (Click in order of rotation):
+                                            </span>
+                                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                                                {houseMembers.map(member => {
+                                                    const isSelected = rotationQueue.includes(member.id);
+                                                    return (
+                                                        <button
+                                                            key={member.id}
+                                                            type="button"
+                                                            onClick={() => {
+                                                                if (!isSelected) {
+                                                                    setRotationQueue([...rotationQueue, member.id]);
+                                                                }
+                                                            }}
+                                                            disabled={isSelected}
+                                                            className="btn btn-secondary"
+                                                            style={{
+                                                                padding: '6px 12px',
+                                                                fontSize: '0.8rem',
+                                                                opacity: isSelected ? 0.4 : 1,
+                                                                cursor: isSelected ? 'not-allowed' : 'pointer',
+                                                                background: isSelected ? 'rgba(255,255,255,0.02)' : 'rgba(255,255,255,0.07)',
+                                                                borderColor: 'rgba(255,255,255,0.1)'
+                                                            }}
+                                                        >
+                                                            + {member.name}
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </>
                             )}
 
                             <div className="form-group">

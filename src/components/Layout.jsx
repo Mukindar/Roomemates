@@ -5,6 +5,7 @@ export default function Layout({
     profile,
     house,
     onSignOut,
+    onSwitchHouse,
     activeTab,
     setActiveTab,
     notifications = [],
@@ -37,11 +38,16 @@ export default function Layout({
 
             {/* Sidebar Panel */}
             <aside className="sidebar">
-                <div className="sidebar-header" style={{ position: 'relative' }}>
+                <div
+                    onClick={() => setActiveTab('dashboard')}
+                    className="sidebar-header"
+                    style={{ position: 'relative', cursor: 'pointer' }}
+                    title="Go to Dashboard"
+                >
                     <div className="logo-icon purple-gradient" style={{ width: '38px', height: '38px', borderRadius: '8px' }}>
                         <Users size={20} />
                     </div>
-                    <span className="sidebar-logo">Roomemates</span>
+                    <span className="sidebar-logo">{house?.name || 'Roomemates'}</span>
 
                     {/* Notification Bell */}
                     <div style={{ position: 'relative', marginLeft: 'auto' }}>
@@ -178,9 +184,15 @@ export default function Layout({
                     </ul>
                 </nav>
 
-                {/* Sidebar Footer User Details */}
                 <div className="sidebar-footer">
-                    <div className="user-badge font-sans">
+                    <div
+                        onClick={() => setActiveTab('dashboard')}
+                        className="user-badge font-sans"
+                        style={{ cursor: 'pointer', transition: 'opacity 0.2s' }}
+                        title="Go to Dashboard"
+                        onMouseEnter={(e) => e.currentTarget.style.opacity = '0.8'}
+                        onMouseLeave={(e) => e.currentTarget.style.opacity = '1'}
+                    >
                         <div className="user-avatar">
                             {profile?.name ? profile.name.charAt(0).toUpperCase() : 'U'}
                         </div>
@@ -190,9 +202,23 @@ export default function Layout({
                         </div>
                     </div>
 
-                    <button onClick={onSignOut} className="btn btn-secondary w-full" style={{ padding: '8px 16px', fontSize: '0.85rem' }}>
-                        <LogOut size={14} style={{ marginRight: '6px' }} /> Log Out
-                    </button>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                        <button
+                            onClick={onSwitchHouse}
+                            className="btn btn-secondary"
+                            style={{ flexGrow: 1, padding: '8px 12px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}
+                        >
+                            Switch House
+                        </button>
+                        <button
+                            onClick={onSignOut}
+                            className="btn btn-secondary"
+                            style={{ padding: '8px 12px', fontSize: '0.85rem' }}
+                            title="Log Out"
+                        >
+                            <LogOut size={14} />
+                        </button>
+                    </div>
                 </div>
             </aside>
 
