@@ -93,6 +93,7 @@ export default function Layout({
                                 overflowY: 'auto',
                                 zIndex: 100,
                                 padding: '12px',
+                                backgroundColor: 'var(--bg-tertiary)',
                                 boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.4)',
                                 border: '1px solid rgba(255, 255, 255, 0.15)',
                                 display: 'flex',
