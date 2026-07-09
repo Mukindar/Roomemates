@@ -12,6 +12,10 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
     const [showHistoryDrawer, setShowHistoryDrawer] = useState(false);
     const [starRatings, setStarRatings] = useState({}); // { choreId: rating }
 
+    const [showSkipModal, setShowSkipModal] = useState(false);
+    const [selectedChoreToSkip, setSelectedChoreToSkip] = useState(null);
+    const [skipAssignee, setSkipAssignee] = useState('');
+
     // Form State
     const [name, setName] = useState('');
     const [desc, setDesc] = useState('');
@@ -44,6 +48,9 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
             setDueDate('');
             setRotationType('rotating');
             setRotationQueue(houseMembers.map(m => m.id));
+        },
+        onError: (error) => {
+            alert(`Database request failed: ${error.message}`);
         }
     });
 
@@ -73,6 +80,9 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
         onSuccess: () => {
             queryClient.invalidateQueries(['chores']);
             queryClient.invalidateQueries(['chore_notifications']);
+        },
+        onError: (error) => {
+            alert(`Database request failed: ${error.message}\n\nIf you see column errors, please make sure you ran the SQL query in walkthrough.md in your Supabase SQL Editor to add the approval schema columns!`);
         }
     });
 
@@ -83,7 +93,8 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
                 last_completed_at: new Date().toISOString(),
                 last_completed_by: claimantId,
                 is_pending_approval: false,
-                pending_completed_by: null
+                pending_completed_by: null,
+                approval_claimed_at: null
             };
 
             let nextAssigneeId = currentAssigneeId;
@@ -148,6 +159,9 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
             queryClient.invalidateQueries(['chores']);
             queryClient.invalidateQueries(['chore_history']);
             queryClient.invalidateQueries(['chore_notifications']);
+        },
+        onError: (error) => {
+            alert(`Database request failed: ${error.message}\n\nIf you see column errors, please make sure you ran the SQL query in walkthrough.md in your Supabase SQL Editor to add the approval schema columns!`);
         }
     });
 
@@ -158,7 +172,8 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
                 .from('chores')
                 .update({
                     is_pending_approval: false,
-                    pending_completed_by: null
+                    pending_completed_by: null,
+                    approval_claimed_at: null
                 })
                 .eq('id', choreId);
             if (error) throw error;
@@ -172,26 +187,18 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
         onSuccess: () => {
             queryClient.invalidateQueries(['chores']);
             queryClient.invalidateQueries(['chore_notifications']);
+        },
+        onError: (error) => {
+            alert(`Database request failed: ${error.message}\n\nIf you see column errors, please make sure you ran the SQL query in walkthrough.md in your Supabase SQL Editor to add the approval schema columns!`);
         }
     });
 
     // 5. Mutation: Skip turn
     const skipTurnMutation = useMutation({
-        mutationFn: async ({ choreId, currentAssigneeId, name }) => {
-            let nextAssigneeId = currentAssigneeId;
-            const targetChore = chores.find(c => c.id === choreId);
-
-            if (houseMembers.length > 1) {
-                const order = (targetChore?.rotation_order || []).filter(uid => houseMembers.some(m => m.id === uid));
-                const activeQueue = order.length > 0 ? order : houseMembers.map(m => m.id);
-                const currentIndex = activeQueue.indexOf(currentAssigneeId);
-                const nextIndex = currentIndex !== -1 ? (currentIndex + 1) % activeQueue.length : 0;
-                nextAssigneeId = activeQueue[nextIndex];
-            }
-
+        mutationFn: async ({ choreId, targetRoommateId, name }) => {
             const { error } = await supabase
                 .from('chores')
-                .update({ assigned_to: nextAssigneeId })
+                .update({ assigned_to: targetRoommateId })
                 .eq('id', choreId);
             if (error) throw error;
 
@@ -206,13 +213,19 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
             await supabase.from('chore_notifications').insert([{
                 house_id: houseId,
                 message: `${profile.name} skipped turn for "${name}". It has been passed to you!`,
-                profile_id: nextAssigneeId
+                profile_id: targetRoommateId
             }]);
         },
         onSuccess: () => {
             queryClient.invalidateQueries(['chores']);
             queryClient.invalidateQueries(['chore_history']);
             queryClient.invalidateQueries(['chore_notifications']);
+            setShowSkipModal(false);
+            setSelectedChoreToSkip(null);
+            setSkipAssignee('');
+        },
+        onError: (error) => {
+            alert(`Database request failed: ${error.message}`);
         }
     });
 
@@ -246,6 +259,9 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
             setShowSwapModal(false);
             setSelectedChoreToSwap(null);
             setSwapAssignee('');
+        },
+        onError: (error) => {
+            alert(`Database request failed: ${error.message}`);
         }
     });
 
@@ -257,6 +273,9 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
         },
         onSuccess: () => {
             queryClient.invalidateQueries(['chores']);
+        },
+        onError: (error) => {
+            alert(`Database request failed: ${error.message}`);
         }
     });
 
@@ -332,13 +351,19 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
         });
     };
 
-    const handleSkipChore = async (chore) => {
-        if (!confirm(`Are you sure you want to skip turn for "${chore.name}"?`)) return;
+    const handleSkipOpen = (chore) => {
+        setSelectedChoreToSkip(chore);
+        setShowSkipModal(true);
+    };
+
+    const handleSkipSubmit = async (e) => {
+        e.preventDefault();
+        if (!skipAssignee) return;
         try {
             await skipTurnMutation.mutateAsync({
-                choreId: chore.id,
-                currentAssigneeId: chore.assigned_to,
-                name: chore.name
+                choreId: selectedChoreToSkip.id,
+                targetRoommateId: skipAssignee,
+                name: selectedChoreToSkip.name
             });
         } catch (err) {
             alert('Failed to skip: ' + err.message);
@@ -470,9 +495,9 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
                                             {!isOneOffCompleted && !chore.is_pending_approval && chore.rotation_type === 'rotating' && houseMembers.length > 1 && (
                                                 <>
                                                     <button
-                                                        onClick={() => handleSkipChore(chore)}
+                                                        onClick={() => handleSkipOpen(chore)}
                                                         className="btn btn-secondary btn-small"
-                                                        title="Skip turn (Pass to next)"
+                                                        title="Skip & Assign turn to roommate"
                                                         style={{ padding: '6px' }}
                                                     >
                                                         <FastForward size={14} />
@@ -566,6 +591,40 @@ export default function Chores({ profile, houseId, houseMembers, chores, choreHi
                             <div className="flex gap-4">
                                 <button type="submit" className="btn btn-primary" style={{ flexGrow: 1 }}>Confirm Swap</button>
                                 <button type="button" onClick={() => { setShowSwapModal(false); setSelectedChoreToSwap(null); }} className="btn btn-secondary">Cancel</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {/* Skip Modal */}
+            {showSkipModal && selectedChoreToSkip && (
+                <div className="modal-overlay">
+                    <div className="glass-card modal-content" style={{ maxWidth: '400px' }}>
+                        <div className="modal-header">
+                            <h3>Skip & Re-Assign Turn</h3>
+                            <button onClick={() => { setShowSkipModal(false); setSelectedChoreToSkip(null); setSkipAssignee(''); }} className="modal-close-btn">✕</button>
+                        </div>
+                        <form onSubmit={handleSkipSubmit} className="spaced-y-4">
+                            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                                Skip this turn of <strong>{selectedChoreToSkip.name}</strong> and assign to:
+                            </p>
+                            <div className="form-group">
+                                <select
+                                    value={skipAssignee}
+                                    onChange={(e) => setSkipAssignee(e.target.value)}
+                                    className="input-field"
+                                    required
+                                >
+                                    <option value="">Select Roommate...</option>
+                                    {houseMembers.filter(m => m.id !== selectedChoreToSkip.assigned_to).map(member => (
+                                        <option key={member.id} value={member.id}>{member.name}</option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div className="flex gap-4">
+                                <button type="submit" className="btn btn-primary" style={{ flexGrow: 1 }}>Confirm Skip</button>
+                                <button type="button" onClick={() => { setShowSkipModal(false); setSelectedChoreToSkip(null); setSkipAssignee(''); }} className="btn btn-secondary">Cancel</button>
                             </div>
                         </form>
                     </div>

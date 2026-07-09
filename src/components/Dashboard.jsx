@@ -93,6 +93,9 @@ export default function Dashboard({ profile, house, houseMembers, chores, setAct
         onSuccess: () => {
             queryClient.invalidateQueries(['chores']);
             queryClient.invalidateQueries(['chore_notifications']);
+        },
+        onError: (error) => {
+            alert(`Database request failed: ${error.message}\n\nIf you see column errors, please make sure you ran the SQL query in walkthrough.md in your Supabase SQL Editor to add the approval schema columns!`);
         }
     });
 
@@ -171,6 +174,9 @@ export default function Dashboard({ profile, house, houseMembers, chores, setAct
             queryClient.invalidateQueries(['chores']);
             queryClient.invalidateQueries(['chore_history']);
             queryClient.invalidateQueries(['chore_notifications']);
+        },
+        onError: (error) => {
+            alert(`Database request failed: ${error.message}\n\nIf you see column errors, please make sure you ran the SQL query in walkthrough.md in your Supabase SQL Editor to add the approval schema columns!`);
         }
     });
 
@@ -197,6 +203,9 @@ export default function Dashboard({ profile, house, houseMembers, chores, setAct
         onSuccess: () => {
             queryClient.invalidateQueries(['chores']);
             queryClient.invalidateQueries(['chore_notifications']);
+        },
+        onError: (error) => {
+            alert(`Database request failed: ${error.message}\n\nIf you see column errors, please make sure you ran the SQL query in walkthrough.md in your Supabase SQL Editor to add the approval schema columns!`);
         }
     });
 
